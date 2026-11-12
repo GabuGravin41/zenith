@@ -9,6 +9,7 @@ import com.zenith.data.local.ProviderCategory
 import com.zenith.data.local.TransactionEntity
 import com.zenith.data.local.SourceBalance
 import com.zenith.data.local.MediaFilterEntity
+import com.zenith.data.local.PartyOverrideEntity
 import com.zenith.data.SettingsManager
 import com.zenith.domain.InsightsEngine
 import com.zenith.domain.MediaScanner
@@ -64,6 +65,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val pendingReviewTransactions: StateFlow<List<TransactionEntity>> = db.transactionDao().getTransactionsNeedingReview()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val partyOverrides: StateFlow<List<PartyOverrideEntity>> = db.partyOverrideDao().getAllOverrides()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun toggleFlipParty(partyName: String, currentlyFlipped: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val existing = partyOverrides.value.find { it.partyName == partyName }
+            db.partyOverrideDao().upsert(
+                PartyOverrideEntity(
+                    partyName = partyName,
+                    isDismissed = existing?.isDismissed ?: false,
+                    isFlipped = !currentlyFlipped
+                )
+            )
+        }
+    }
+
+    fun dismissParty(partyName: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val existing = partyOverrides.value.find { it.partyName == partyName }
+            db.partyOverrideDao().upsert(
+                PartyOverrideEntity(
+                    partyName = partyName,
+                    isDismissed = true,
+                    isFlipped = existing?.isFlipped ?: false
+                )
+            )
+        }
+    }
 
     private val _timeHorizonDays = MutableStateFlow<Int?>(null) // null = all time, 7 = 7 days, 30 = 30 days, etc.
     val timeHorizonDays: StateFlow<Int?> = _timeHorizonDays.asStateFlow()

@@ -40,6 +40,7 @@ class SmsScanWorker(
         cursor?.use {
             val bodyIndex = it.getColumnIndex(Telephony.Sms.BODY)
             val addressIndex = it.getColumnIndex(Telephony.Sms.ADDRESS)
+            val dateIndex = it.getColumnIndex(Telephony.Sms.DATE)
             
             var count = 0
             var newTransactionsCount = 0
@@ -47,8 +48,9 @@ class SmsScanWorker(
             while (it.moveToNext() && count < maxMessages) {
                 val body = it.getString(bodyIndex) ?: ""
                 val address = if (addressIndex >= 0) it.getString(addressIndex) else null
+                val smsDate = if (dateIndex >= 0 && !it.isNull(dateIndex)) it.getLong(dateIndex) else null
                 
-                val transaction = SmsParser.parseSingleSms(body, address)
+                val transaction = SmsParser.parseSingleSms(body, address, smsDate)
                 
                 if (transaction != null) {
                     val savedCategory = providerDao.getCategoryForProvider(transaction.description)

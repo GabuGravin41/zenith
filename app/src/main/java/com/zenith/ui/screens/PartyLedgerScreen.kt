@@ -45,9 +45,14 @@ fun PartyLedgerScreen(
     var searchQuery by remember { mutableStateOf("") }
     var selectedParty by remember { mutableStateOf<String?>(null) }
 
-    // In-session overrides (persist across recompositions but reset on app restart)
-    val dismissedParties = remember { mutableStateListOf<String>() }
-    val flippedParties   = remember { mutableStateListOf<String>() }
+    // Persistent overrides from Room Database (survives app restarts)
+    val partyOverrides by viewModel.partyOverrides.collectAsState()
+    val dismissedSet = remember(partyOverrides) {
+        partyOverrides.filter { it.isDismissed }.map { it.partyName }.toSet()
+    }
+    val flippedSet = remember(partyOverrides) {
+        partyOverrides.filter { it.isFlipped }.map { it.partyName }.toSet()
+    }
 
     // Build one PartyEntry per person — fuzzy name deduplication via NameMatcher (no AI)
     val partyLedgers: List<PartyEntry> = remember(transactions) {
@@ -80,12 +85,12 @@ fun PartyLedgerScreen(
     }
 
     // Apply search + dismissed filter + flip overrides
-    val displayList: List<PartyEntry> = remember(partyLedgers, searchQuery, dismissedParties, flippedParties) {
+    val displayList: List<PartyEntry> = remember(partyLedgers, searchQuery, dismissedSet, flippedSet) {
         partyLedgers
-            .filter { it.name !in dismissedParties }
+            .filter { it.name !in dismissedSet }
             .filter { searchQuery.isBlank() || it.name.contains(searchQuery, ignoreCase = true) }
             .map { entry ->
-                if (entry.name in flippedParties) entry.copy(net = -entry.net) else entry
+                if (entry.name in flippedSet) entry.copy(net = -entry.net) else entry
             }
     }
 
@@ -320,21 +325,21 @@ fun PartyLedgerScreen(
                                             modifier = Modifier.fillMaxWidth(),
                                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
+                                            val isFlipped = entry.name in flippedSet
                                             OutlinedButton(
                                                 onClick = {
-                                                    if (flippedParties.contains(entry.name)) flippedParties.remove(entry.name)
-                                                    else flippedParties.add(entry.name)
+                                                    viewModel.toggleFlipParty(entry.name, isFlipped)
                                                 },
                                                 modifier = Modifier.weight(1f),
                                                 shape = RoundedCornerShape(12.dp)
                                             ) {
                                                 Icon(Icons.Default.SwapVert, contentDescription = null, modifier = Modifier.size(16.dp))
                                                 Spacer(Modifier.width(4.dp))
-                                                Text("Flip Direction", style = MaterialTheme.typography.labelSmall)
+                                                Text(if (isFlipped) "Un-flip" else "Flip Direction", style = MaterialTheme.typography.labelSmall)
                                             }
                                             OutlinedButton(
                                                 onClick = {
-                                                    dismissedParties.add(entry.name)
+                                                    viewModel.dismissParty(entry.name)
                                                     selectedParty = null
                                                 },
                                                 modifier = Modifier.weight(1f),

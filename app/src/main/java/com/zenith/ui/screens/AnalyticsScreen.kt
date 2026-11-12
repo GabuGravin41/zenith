@@ -31,6 +31,7 @@ import com.zenith.ui.MainViewModel
 import java.text.SimpleDateFormat
 import java.util.*
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AnalyticsScreen(viewModel: MainViewModel) {
     val allTransactions by viewModel.transactions.collectAsState()
@@ -60,87 +61,92 @@ fun AnalyticsScreen(viewModel: MainViewModel) {
     val netFlow = totalIncome - totalExpense
     val savingsRate = if (totalIncome > 0) ((netFlow / totalIncome) * 100).toInt() else 0
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp)
-    ) {
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(
-                        "Intelligence Hub",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.ExtraBold
-                    )
-                    Text(
-                        "${transactions.size} transactions analyzed",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                    )
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text(
+                            "Intelligence Hub",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                        Text(
+                            "${transactions.size} transactions analyzed",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { viewModel.togglePrivacyMode() }) {
+                        Icon(
+                            if (isPrivacyMode) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                            contentDescription = "Toggle privacy",
+                            tint = if (isPrivacyMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                        )
+                    }
                 }
-                IconButton(onClick = { viewModel.togglePrivacyMode() }) {
-                    Icon(
-                        if (isPrivacyMode) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                        contentDescription = "Toggle privacy",
-                        tint = if (isPrivacyMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                    )
-                }
-            }
-        }
-
-        // ── Timeline Horizon Selector ───────────────────────────────────────
-        item {
-            TimelineSelector(
-                selectedDays = timeHorizonDays,
-                onSelect = { viewModel.setTimeHorizon(it) }
             )
         }
-
-        // ── Pending Clarifications Loop (Hardcoded manual intelligence) ───────
-        if (pendingReview.isNotEmpty()) {
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .background(MaterialTheme.colorScheme.surface),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp)
+        ) {
+            // ── Timeline Horizon Selector ───────────────────────────────────────
             item {
-                ClarifyTransactionsCard(
-                    pending = pendingReview,
-                    isPrivacyMode = isPrivacyMode,
-                    onClassify = { tx, cat ->
-                        viewModel.reclassifyTransaction(tx.id, tx.description, cat)
-                    }
+                TimelineSelector(
+                    selectedDays = timeHorizonDays,
+                    onSelect = { viewModel.setTimeHorizon(it) }
                 )
             }
+
+            // ── Pending Clarifications Loop (Hardcoded manual intelligence) ───────
+            if (pendingReview.isNotEmpty()) {
+                item {
+                    ClarifyTransactionsCard(
+                        pending = pendingReview,
+                        isPrivacyMode = isPrivacyMode,
+                        onClassify = { tx, cat ->
+                            viewModel.reclassifyTransaction(tx.id, tx.description, cat)
+                        }
+                    )
+                }
+            }
+
+            // ── Net Summary Card ────────────────────────────────────────────────
+            item { NetSummaryCard(totalIncome, totalExpense, netFlow, savingsRate, isPrivacyMode) }
+
+            // ── Cash Flow Bar ───────────────────────────────────────────────────
+            item { CashFlowCard(totalIncome, totalExpense, isPrivacyMode) }
+
+            // ── Spending Donut + Legend ─────────────────────────────────────────
+            if (categorySpending.isNotEmpty()) {
+                item { SpendingBreakdownCard(categorySpending, totalExpense, isPrivacyMode) }
+            }
+
+            // ── 30-Day Trend Line ───────────────────────────────────────────────
+            item { TrendLineCard(transactions, isPrivacyMode) }
+
+            // ── Top Merchants ────────────────────────────────────────────────────
+            item { TopMerchantsCard(transactions, isPrivacyMode) }
+
+            // ── Weekday vs Weekend ───────────────────────────────────────────────
+            item { WeekdayWeekendCard(transactions, isPrivacyMode) }
+
+            // ── Suspicious Transactions ──────────────────────────────────────────
+            val suspicious = transactions.filter { it.isSuspicious }
+            if (suspicious.isNotEmpty()) {
+                item { SuspiciousCard(suspicious, isPrivacyMode) }
+            }
+
+            item { Spacer(Modifier.height(80.dp)) }
         }
-
-        // ── Net Summary Card ────────────────────────────────────────────────
-        item { NetSummaryCard(totalIncome, totalExpense, netFlow, savingsRate, isPrivacyMode) }
-
-        // ── Cash Flow Bar ───────────────────────────────────────────────────
-        item { CashFlowCard(totalIncome, totalExpense) }
-
-        // ── Spending Donut + Legend ─────────────────────────────────────────
-        if (categorySpending.isNotEmpty()) {
-            item { SpendingBreakdownCard(categorySpending, totalExpense, isPrivacyMode) }
-        }
-
-        // ── 30-Day Trend Line ───────────────────────────────────────────────
-        item { TrendLineCard(transactions) }
-
-        // ── Top Merchants ────────────────────────────────────────────────────
-        item { TopMerchantsCard(transactions, isPrivacyMode) }
-
-        // ── Weekday vs Weekend ───────────────────────────────────────────────
-        item { WeekdayWeekendCard(transactions, isPrivacyMode) }
-
-        // ── Suspicious Transactions ──────────────────────────────────────────
-        val suspicious = transactions.filter { it.isSuspicious }
-        if (suspicious.isNotEmpty()) {
-            item { SuspiciousCard(suspicious, isPrivacyMode) }
-        }
-
-        item { Spacer(Modifier.height(80.dp)) }
     }
 }
 
@@ -357,7 +363,7 @@ fun NetSummaryCard(income: Double, expense: Double, net: Double, savingsRate: In
                 ) {
                     StatPill("Inflow", income.masked(isPrivacyMode), Color(0xFF4ADE80))
                     StatPill("Outflow", expense.masked(isPrivacyMode), Color(0xFFF87171))
-                    StatPill("Rate", "$animatedRate%", Color(0xFF67E8F9))
+                    StatPill("Rate", if (isPrivacyMode) "••%" else "$animatedRate%", Color(0xFF67E8F9))
                 }
             }
         }
@@ -375,7 +381,7 @@ private fun StatPill(label: String, value: String, valueColor: Color) {
 // ── Cash Flow Bar ────────────────────────────────────────────────────────────
 
 @Composable
-fun CashFlowCard(income: Double, expense: Double) {
+fun CashFlowCard(income: Double, expense: Double, isPrivacyMode: Boolean = false) {
     val total = (income + expense).coerceAtLeast(1.0)
     val inRatio = (income / total).toFloat()
     val animatedInRatio by animateFloatAsState(
@@ -414,12 +420,18 @@ fun CashFlowCard(income: Double, expense: Double) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(10.dp).clip(CircleShape).background(Color(0xFF10B981)))
                     Spacer(Modifier.width(6.dp))
-                    Text("Income (${(animatedInRatio * 100).toInt()}%)", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        if (isPrivacyMode) "Income (••%)" else "Income (${(animatedInRatio * 100).toInt()}%)",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(10.dp).clip(CircleShape).background(Color(0xFFEF4444)))
                     Spacer(Modifier.width(6.dp))
-                    Text("Expenses (${((1f - animatedInRatio) * 100).toInt()}%)", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        if (isPrivacyMode) "Expenses (••%)" else "Expenses (${((1f - animatedInRatio) * 100).toInt()}%)",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
             }
         }
@@ -515,7 +527,7 @@ fun SpendingBreakdownCard(
 // ── 30-Day Trend Line ────────────────────────────────────────────────────────
 
 @Composable
-fun TrendLineCard(transactions: List<TransactionEntity>) {
+fun TrendLineCard(transactions: List<TransactionEntity>, isPrivacyMode: Boolean = false) {
     val dailySpend = remember(transactions) {
         val now = System.currentTimeMillis()
         val dayMillis = 24 * 60 * 60 * 1000L
@@ -539,7 +551,7 @@ fun TrendLineCard(transactions: List<TransactionEntity>) {
             Text("30-Day Spending Trend", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
             Text(
-                "Peak: Ksh ${String.format("%,.0f", maxSpend)}",
+                if (isPrivacyMode) "Peak: ••••" else "Peak: Ksh ${String.format("%,.0f", maxSpend)}",
                 style = MaterialTheme.typography.labelSmall,
                 color = Color.Gray
             )

@@ -9,6 +9,9 @@ object SmsParser {
     private val dateFormatter = SimpleDateFormat("dd/MM/yy hh:mm a", Locale.US)
     private val altDateFormatter = SimpleDateFormat("dd/MM/yyyy hh:mm a", Locale.US)
     private val standardDateFormatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+    private val isoDateShortFormatter = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+    private val monthNameFormatter = SimpleDateFormat("dd MMM yyyy", Locale.US)
+    private val monthNameWithTime = SimpleDateFormat("dd MMM yyyy hh:mm a", Locale.US)
 
     private fun generateId(reference: String?): String {
         if (!reference.isNullOrBlank()) return reference
@@ -19,14 +22,21 @@ object SmsParser {
         return raw.replace(",", "").toDoubleOrNull() ?: 0.0
     }
 
-    private fun parseDate(dateStr: String, timeStr: String): Date {
+    private fun parseDate(dateStr: String, timeStr: String, fallbackTimestamp: Long? = null): Date {
         val cleanTime = timeStr.trim().replace("\\s+".toRegex(), " ")
         return try {
-            dateFormatter.parse("$dateStr $cleanTime")
+            val parsed = dateFormatter.parse("$dateStr $cleanTime")
                 ?: altDateFormatter.parse("$dateStr $cleanTime")
-                ?: Date()
+            if (parsed != null) {
+                val cal = Calendar.getInstance().apply { time = parsed }
+                val year = cal.get(Calendar.YEAR)
+                if (year in 2015..2035) parsed
+                else fallbackTimestamp?.let { Date(it) } ?: parsed
+            } else {
+                fallbackTimestamp?.let { Date(it) } ?: Date()
+            }
         } catch (e: Exception) {
-            Date()
+            fallbackTimestamp?.let { Date(it) } ?: Date()
         }
     }
 
@@ -36,7 +46,7 @@ object SmsParser {
         return feeMatch?.groupValues?.get(1)?.let { parseAmount(it) } ?: 0.0
     }
 
-    fun parseSingleSms(text: String, senderAddress: String? = null): Transaction? {
+    fun parseSingleSms(text: String, senderAddress: String? = null, smsTimestamp: Long? = null): Transaction? {
         val upperText = text.uppercase()
         val upperSender = (senderAddress ?: "").uppercase()
 
@@ -44,41 +54,41 @@ object SmsParser {
             // M-Pesa patterns or MPESA sender
             upperSender.contains("MPESA") || upperText.contains("M-PESA") || upperText.contains("MPESA") ||
                     Pattern.compile("^[A-Z0-9]{10}\\s+CONFIRMED", Pattern.CASE_INSENSITIVE).matcher(text.trim()).find() -> {
-                parseMpesa(text)
+                parseMpesa(text, smsTimestamp)
             }
             // Equity Bank
             upperSender.contains("EQUITY") || upperSender.contains("EQUITEL") || upperText.contains("EQUITY") || upperText.contains("EQUITEL") -> {
-                parseEquity(text)
+                parseEquity(text, smsTimestamp)
             }
             // KCB Bank / Vooma
             upperSender.contains("KCB") || upperSender.contains("VOOMA") || upperText.contains("KCB") || upperText.contains("VOOMA") -> {
-                parseKcb(text)
+                parseKcb(text, smsTimestamp)
             }
             // Co-operative Bank / MCo-op Cash
             upperSender.contains("CO-OP") || upperSender.contains("COOP") || upperText.contains("CO-OP BANK") || upperText.contains("MCO-OP") -> {
-                parseCoop(text)
+                parseCoop(text, smsTimestamp)
             }
             // NCBA / LOOP
             upperSender.contains("NCBA") || upperSender.contains("LOOP") || upperText.contains("NCBA") -> {
-                parseNcba(text)
+                parseNcba(text, smsTimestamp)
             }
             // ABSA
             upperSender.contains("ABSA") || upperText.contains("ABSA") -> {
-                parseAbsa(text)
+                parseAbsa(text, smsTimestamp)
             }
             // Stanbic
             upperSender.contains("STANBIC") || upperText.contains("STANBIC") -> {
-                parseStanbic(text)
+                parseStanbic(text, smsTimestamp)
             }
             // Generic Bank / Financial SMS pattern fallback
             upperText.contains("DEBIT") || upperText.contains("CREDIT") || upperText.contains("TRANSFERRED") -> {
-                parseGenericFinancialSms(text, senderAddress)
+                parseGenericFinancialSms(text, senderAddress, smsTimestamp)
             }
             else -> null
         }
     }
 
-    private fun parseMpesa(text: String): Transaction? {
+    private fun parseMpesa(text: String, smsTimestamp: Long? = null): Transaction? {
         val confirmRef = Regex("^([A-Z0-9]{10,12})\\s+Confirmed", RegexOption.IGNORE_CASE)
             .find(text.trim())?.groupValues?.get(1)
             ?: Regex("Ref:\\s*([A-Z0-9]{10,12})", RegexOption.IGNORE_CASE)
@@ -86,7 +96,11 @@ object SmsParser {
 
         val dateMatch = Regex("on\\s+(\\d{1,2}/\\d{1,2}/\\d{2,4})\\s+at\\s+(\\d{1,2}:\\d{2}\\s*[AP]M)", RegexOption.IGNORE_CASE)
             .find(text)
-        val date = if (dateMatch != null) parseDate(dateMatch.groupValues[1], dateMatch.groupValues[2]) else Date()
+        val date = if (dateMatch != null) {
+            parseDate(dateMatch.groupValues[1], dateMatch.groupValues[2], smsTimestamp)
+        } else {
+            smsTimestamp?.let { Date(it) } ?: Date()
+        }
 
         val balanceMatch = Regex("balance[^\\d]*([\\d,]+\\.?\\d*)", RegexOption.IGNORE_CASE).find(text)
         val balance = balanceMatch?.groupValues?.get(1)?.let { parseAmount(it) }
@@ -207,7 +221,7 @@ object SmsParser {
         return null
     }
 
-    private fun parseEquity(text: String): Transaction? {
+    private fun parseEquity(text: String, smsTimestamp: Long? = null): Transaction? {
         val debitMatch = Regex("(?:debited\\s+(?:with|by)?|debit\\s+of)\\s*(?:KES|Ksh)?\\s*([\\d,]+\\.?\\d*)", RegexOption.IGNORE_CASE).find(text)
             ?: Regex("(?:KES|Ksh)\\s*([\\d,]+\\.?\\d*)\\s+debited", RegexOption.IGNORE_CASE).find(text)
         val creditMatch = Regex("(?:credited\\s+(?:with|by)?|credit\\s+of)\\s*(?:KES|Ksh)?\\s*([\\d,]+\\.?\\d*)", RegexOption.IGNORE_CASE).find(text)
@@ -217,7 +231,7 @@ object SmsParser {
 
         val balance = balanceMatch?.groupValues?.get(1)?.let { parseAmount(it) }
         val reference = refMatch?.groupValues?.get(1)
-        val date = extractGenericDate(text) ?: Date()
+        val date = extractGenericDate(text, smsTimestamp)
         val fee = extractFee(text)
 
         if (debitMatch != null) {
@@ -265,7 +279,7 @@ object SmsParser {
         return null
     }
 
-    private fun parseKcb(text: String): Transaction? {
+    private fun parseKcb(text: String, smsTimestamp: Long? = null): Transaction? {
         val debitMatch = Regex("(?:debited\\s+with|debit\\s+of|withdrawn|transferred)\\s*(?:KES|Ksh)?\\s*([\\d,]+\\.?\\d*)", RegexOption.IGNORE_CASE).find(text)
             ?: Regex("(?:KES|Ksh)\\s*([\\d,]+\\.?\\d*)\\s+(?:debited|spent)", RegexOption.IGNORE_CASE).find(text)
         val creditMatch = Regex("(?:credited\\s+with|credit\\s+of|received)\\s*(?:KES|Ksh)?\\s*([\\d,]+\\.?\\d*)", RegexOption.IGNORE_CASE).find(text)
@@ -275,7 +289,7 @@ object SmsParser {
 
         val balance = balanceMatch?.groupValues?.get(1)?.let { parseAmount(it) }
         val reference = refMatch?.groupValues?.get(1)
-        val date = extractGenericDate(text) ?: Date()
+        val date = extractGenericDate(text, smsTimestamp)
         val fee = extractFee(text)
 
         if (debitMatch != null) {
@@ -323,7 +337,7 @@ object SmsParser {
         return null
     }
 
-    private fun parseCoop(text: String): Transaction? {
+    private fun parseCoop(text: String, smsTimestamp: Long? = null): Transaction? {
         val debitMatch = Regex("(?:debited\\s+with|debit\\s+of|withdrawn|paid)\\s*(?:KES|Ksh)?\\s*([\\d,]+\\.?\\d*)", RegexOption.IGNORE_CASE).find(text)
             ?: Regex("(?:KES|Ksh)\\s*([\\d,]+\\.?\\d*)\\s+(?:debited|paid)", RegexOption.IGNORE_CASE).find(text)
         val creditMatch = Regex("(?:credited\\s+with|credit\\s+of|received)\\s*(?:KES|Ksh)?\\s*([\\d,]+\\.?\\d*)", RegexOption.IGNORE_CASE).find(text)
@@ -332,7 +346,7 @@ object SmsParser {
 
         val balance = balanceMatch?.groupValues?.get(1)?.let { parseAmount(it) }
         val reference = refMatch?.groupValues?.get(1)
-        val date = extractGenericDate(text) ?: Date()
+        val date = extractGenericDate(text, smsTimestamp)
         val fee = extractFee(text)
 
         if (debitMatch != null) {
@@ -378,7 +392,7 @@ object SmsParser {
         return null
     }
 
-    private fun parseNcba(text: String): Transaction? {
+    private fun parseNcba(text: String, smsTimestamp: Long? = null): Transaction? {
         val debitMatch = Regex("(?:debited\\s+with|debit|sent|paid)\\s*(?:KES|Ksh)?\\s*([\\d,]+\\.?\\d*)", RegexOption.IGNORE_CASE).find(text)
         val creditMatch = Regex("(?:credited\\s+with|credit|received)\\s*(?:KES|Ksh)?\\s*([\\d,]+\\.?\\d*)", RegexOption.IGNORE_CASE).find(text)
         val balanceMatch = Regex("(?:balance|bal)\\s*(?:is)?\\s*(?:KES|Ksh)?\\s*([\\d,]+\\.?\\d*)", RegexOption.IGNORE_CASE).find(text)
@@ -386,7 +400,7 @@ object SmsParser {
 
         val balance = balanceMatch?.groupValues?.get(1)?.let { parseAmount(it) }
         val reference = refMatch?.groupValues?.get(1)
-        val date = extractGenericDate(text) ?: Date()
+        val date = extractGenericDate(text, smsTimestamp)
         val fee = extractFee(text)
 
         if (debitMatch != null) {
@@ -430,7 +444,7 @@ object SmsParser {
         return null
     }
 
-    private fun parseAbsa(text: String): Transaction? {
+    private fun parseAbsa(text: String, smsTimestamp: Long? = null): Transaction? {
         val amountMatch = Regex("(?:KES|Ksh)\\s*([\\d,]+\\.?\\d*)", RegexOption.IGNORE_CASE).find(text)
         val isDebit = text.contains("debited", ignoreCase = true) || text.contains("purchase", ignoreCase = true) || text.contains("paid", ignoreCase = true)
         val isCredit = text.contains("credited", ignoreCase = true) || text.contains("received", ignoreCase = true)
@@ -446,7 +460,7 @@ object SmsParser {
             val description = if (isDebit) "Absa: Debit" else "Absa: Credit"
             return Transaction(
                 id = generateId(reference),
-                date = extractGenericDate(text) ?: Date(),
+                date = extractGenericDate(text, smsTimestamp),
                 amount = amount,
                 type = type,
                 description = description,
@@ -462,7 +476,7 @@ object SmsParser {
         return null
     }
 
-    private fun parseStanbic(text: String): Transaction? {
+    private fun parseStanbic(text: String, smsTimestamp: Long? = null): Transaction? {
         val amountMatch = Regex("(?:KES|Ksh)\\s*([\\d,]+\\.?\\d*)", RegexOption.IGNORE_CASE).find(text)
         val isDebit = text.contains("debit", ignoreCase = true) || text.contains("paid", ignoreCase = true)
         val isCredit = text.contains("credit", ignoreCase = true) || text.contains("received", ignoreCase = true)
@@ -474,7 +488,7 @@ object SmsParser {
             val description = if (isDebit) "Stanbic: Payment" else "Stanbic: Deposit"
             return Transaction(
                 id = generateId(null),
-                date = extractGenericDate(text) ?: Date(),
+                date = extractGenericDate(text, smsTimestamp),
                 amount = amount,
                 type = type,
                 description = description,
@@ -490,7 +504,7 @@ object SmsParser {
         return null
     }
 
-    private fun parseGenericFinancialSms(text: String, sender: String?): Transaction? {
+    private fun parseGenericFinancialSms(text: String, sender: String?, smsTimestamp: Long? = null): Transaction? {
         val amountMatch = Regex("(?:KES|Ksh|USD|EUR)\\s*([\\d,]+\\.?\\d*)", RegexOption.IGNORE_CASE).find(text)
             ?: return null
         val amount = parseAmount(amountMatch.groupValues[1])
@@ -511,7 +525,7 @@ object SmsParser {
 
         return Transaction(
             id = generateId(null),
-            date = extractGenericDate(text) ?: Date(),
+            date = extractGenericDate(text, smsTimestamp),
             amount = amount,
             type = type,
             description = description,
@@ -525,17 +539,41 @@ object SmsParser {
         )
     }
 
-    private fun extractGenericDate(text: String): Date? {
-        val dateMatch = Regex("(\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4})\\s*(?:at)?\\s*(\\d{1,2}:\\d{2}(?::\\d{2})?\\s*[AP]M)?", RegexOption.IGNORE_CASE).find(text)
-        if (dateMatch != null) {
-            val dStr = dateMatch.groupValues[1].replace("-", "/")
-            val tStr = dateMatch.groupValues[2].ifEmpty { "12:00 PM" }
-            return try {
+    private fun extractGenericDate(text: String, fallbackTimestamp: Long? = null): Date {
+        // 1. dd/MM/yy or dd/MM/yyyy or dd-MM-yyyy
+        val dmMatch = Regex("(\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4})\\s*(?:at)?\\s*(\\d{1,2}:\\d{2}(?::\\d{2})?\\s*[AP]M)?", RegexOption.IGNORE_CASE).find(text)
+        if (dmMatch != null) {
+            val dStr = dmMatch.groupValues[1].replace("-", "/")
+            val tStr = dmMatch.groupValues[2].ifEmpty { "12:00 PM" }
+            val parsed = try {
                 dateFormatter.parse("$dStr $tStr") ?: altDateFormatter.parse("$dStr $tStr")
-            } catch (e: Exception) {
-                null
-            }
+            } catch (e: Exception) { null }
+            if (parsed != null) return parsed
         }
-        return null
+
+        // 2. yyyy-MM-dd or yyyy/MM/dd (ISO)
+        val isoMatch = Regex("(\\d{4}[/-]\\d{1,2}[/-]\\d{1,2})(?:\\s*(?:at)?\\s*(\\d{1,2}:\\d{2}(?::\\d{2})?))?", RegexOption.IGNORE_CASE).find(text)
+        if (isoMatch != null) {
+            val dStr = isoMatch.groupValues[1].replace("/", "-")
+            val tStr = isoMatch.groupValues[2].ifEmpty { "12:00:00" }
+            val parsed = try {
+                standardDateFormatter.parse("$dStr $tStr") ?: isoDateShortFormatter.parse(dStr)
+            } catch (e: Exception) { null }
+            if (parsed != null) return parsed
+        }
+
+        // 3. 12-May-2025, 12 May 2025, 12-May-25
+        val wordMonthMatch = Regex("(\\d{1,2})[- ]([A-Za-z]{3,9})[- ](\\d{2,4})\\s*(?:at)?\\s*(\\d{1,2}:\\d{2}\\s*[AP]M)?", RegexOption.IGNORE_CASE).find(text)
+        if (wordMonthMatch != null) {
+            val dStr = "${wordMonthMatch.groupValues[1]} ${wordMonthMatch.groupValues[2].take(3)} ${wordMonthMatch.groupValues[3]}"
+            val tStr = wordMonthMatch.groupValues[4].ifEmpty { "12:00 PM" }
+            val parsed = try {
+                monthNameWithTime.parse("$dStr $tStr") ?: monthNameFormatter.parse(dStr)
+            } catch (e: Exception) { null }
+            if (parsed != null) return parsed
+        }
+
+        // 4. Default to SMS network arrival timestamp (carrier ground-truth)
+        return fallbackTimestamp?.let { Date(it) } ?: Date()
     }
 }
