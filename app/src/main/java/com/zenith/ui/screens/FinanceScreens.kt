@@ -11,6 +11,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -26,12 +28,21 @@ import com.zenith.data.local.TransactionEntity
 import com.zenith.domain.model.Category
 import com.zenith.ui.MainViewModel
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FinanceDashboardScreen(viewModel: MainViewModel, onNavigate: (String) -> Unit) {
     val transactions by viewModel.transactions.collectAsState()
     val sourceBalances by viewModel.sourceBalances.collectAsState()
     val isPrivacyMode by viewModel.isPrivacyModeEnabled.collectAsState()
+    val isScanning by viewModel.isScanning.collectAsState()
+    val pullToRefreshState = rememberPullToRefreshState()
 
+    PullToRefreshBox(
+        isRefreshing = isScanning,
+        onRefresh = { viewModel.manualScanSms(fullScan = true) },
+        state = pullToRefreshState,
+        modifier = Modifier.fillMaxSize()
+    ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -101,6 +112,7 @@ fun FinanceDashboardScreen(viewModel: MainViewModel, onNavigate: (String) -> Uni
         
         item { Spacer(Modifier.height(80.dp)) }
     }
+    } // end PullToRefreshBox
 }
 
 @Composable

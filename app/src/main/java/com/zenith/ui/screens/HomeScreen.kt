@@ -13,6 +13,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -30,6 +32,7 @@ import com.zenith.domain.ZenithInsight
 import com.zenith.ui.MainViewModel
 import com.zenith.ui.navigation.Screen
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(viewModel: MainViewModel, onNavigate: (String) -> Unit) {
     val transactions by viewModel.transactions.collectAsState()
@@ -38,7 +41,15 @@ fun HomeScreen(viewModel: MainViewModel, onNavigate: (String) -> Unit) {
     val latestBalance by viewModel.latestBalance.collectAsState()
     val sourceBalances by viewModel.sourceBalances.collectAsState()
     val isPrivacyMode by viewModel.isPrivacyModeEnabled.collectAsState()
+    val isScanning by viewModel.isScanning.collectAsState()
+    val pullToRefreshState = rememberPullToRefreshState()
 
+    PullToRefreshBox(
+        isRefreshing = isScanning,
+        onRefresh = { viewModel.manualScanSms(fullScan = true) },
+        state = pullToRefreshState,
+        modifier = Modifier.fillMaxSize()
+    ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -164,6 +175,7 @@ fun HomeScreen(viewModel: MainViewModel, onNavigate: (String) -> Unit) {
 
         Spacer(Modifier.height(80.dp))
     }
+    } // end PullToRefreshBox
 }
 
 @Composable
