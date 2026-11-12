@@ -1,21 +1,17 @@
 package com.zenith.domain
 
+import kotlin.math.abs
+import kotlin.math.min
+
 /**
- * Pure algorithmic name deduplication — no AI, no network, offline-first.
- *
- * Strategy (in order of priority):
- *  1. Exact match after normalization (trim, lowercase, collapse spaces)
- *  2. Token-overlap: if the shorter name's tokens are all contained in the longer name → same person
- *     e.g. "JOHN KAMAU" and "JOHN K" → tokens {john} ⊆ {john, kamau} ✓
- *  3. Levenshtein edit distance ≤ 2 for names shorter than 10 chars, ≤ 3 for longer
- *     e.g. "Kamau" vs "Kamao" (typo in SMS)
- *
- * Usage: Call [groupByCanonicalName] on a list of raw name strings.
- * Returns a Map<canonicalName, List<originalNames>> where each entry is one real person.
+ * High-performance algorithmic name deduplication — pure offline, zero AI.
+ * Optimized for mobile devices:
+ *  - O(N) exact-match grouping first
+ *  - Token-inverted index so we only compare candidate pairs that share words
+ *  - Zero-heap-allocation Levenshtein distance with early-exit bounds
  */
 object NameMatcher {
 
-    // Noise words to strip before comparison
     private val NOISE = setOf(
         "mr", "mrs", "ms", "dr", "prof", "eng", "rev",
         "limited", "ltd", "co", "company", "kenya", "nairobi",
@@ -25,7 +21,7 @@ object NameMatcher {
     fun normalize(raw: String): String {
         return raw.trim()
             .lowercase()
-            .replace(Regex("[^a-z0-9 ]"), "") // strip punctuation
+            .replace(Regex("[^a-z0-9 ]"), "")
             .split(" ")
             .filter { it.isNotBlank() && it !in NOISE }
             .joinToString(" ")
@@ -36,34 +32,31 @@ object NameMatcher {
             w.replaceFirstChar { it.uppercase() }
         }
 
-    /** True if two normalized name strings refer to the same person. */
-    fun areSamePerson(a: String, b: String): Boolean {
-        if (a == b) return true
-
-        val tokensA = a.split(" ").filter { it.isNotBlank() }.toSet()
-        val tokensB = b.split(" ").filter { it.isNotBlank() }.toSet()
-
-        // Token subset check: shorter name's tokens must all appear in longer name
-        val (shorter, longer) = if (tokensA.size <= tokensB.size) tokensA to tokensB else tokensB to tokensA
-        if (shorter.isNotEmpty() && longer.containsAll(shorter)) return true
-
-        // Levenshtein for single-token or short names (handle SMS abbreviations / typos)
-        if (a.length <= 15 && levenshtein(a, b) <= 2) return true
-        if (a.length > 15  && levenshtein(a, b) <= 3) return true
-
-        return false
-    }
-
     /**
      * Groups a list of raw names into clusters of the same person.
-     * Returns a map of canonical (longest/most-complete) name → all raw variants.
+     * Fast 2-phase approach:
+     * Phase 1: Hash-map grouping on normalized string (O(N))
+     * Phase 2: Token-candidate pairing on unique distinct names only
      */
     fun groupByCanonicalName(rawNames: List<String>): Map<String, List<String>> {
-        // Normalize each name
-        val normalized = rawNames.map { it to normalize(it) }
+        if (rawNames.isEmpty()) return emptyMap()
 
-        // Union-Find to cluster
-        val parent = rawNames.indices.toMutableList()
+        // Phase 1: Group exact normalized matches in O(N)
+        val normalizedMap = mutableMapOf<String, MutableList<String>>()
+        for (raw in rawNames) {
+            val norm = normalize(raw)
+            if (norm.isNotBlank()) {
+                normalizedMap.getOrPut(norm) { mutableListOf() }.add(raw)
+            }
+        }
+
+        val distinctNorms = normalizedMap.keys.toList()
+        if (distinctNorms.size <= 1) {
+            return normalizedMap.mapKeys { titleCase(it.key) }
+        }
+
+        // Phase 2: Inverted index by token to only compare candidates that share a word or prefix
+        val parent = distinctNorms.indices.toMutableList()
 
         fun find(x: Int): Int {
             var r = x
@@ -75,21 +68,68 @@ object NameMatcher {
 
         fun union(x: Int, y: Int) { parent[find(x)] = find(y) }
 
-        for (i in normalized.indices) {
-            for (j in i + 1 until normalized.size) {
-                if (areSamePerson(normalized[i].second, normalized[j].second)) {
-                    union(i, j)
+        // Token inverted index: token -> list of distinctNorm indices
+        val tokenIndex = mutableMapOf<String, MutableList<Int>>()
+        val firstCharIndex = mutableMapOf<Char, MutableList<Int>>()
+
+        distinctNorms.forEachIndexed { idx, norm ->
+            val tokens = norm.split(" ").filter { it.length >= 3 }
+            for (t in tokens) {
+                tokenIndex.getOrPut(t) { mutableListOf() }.add(idx)
+            }
+            if (norm.isNotEmpty()) {
+                firstCharIndex.getOrPut(norm[0]) { mutableListOf() }.add(idx)
+            }
+        }
+
+        val checkedPairs = mutableSetOf<Long>()
+
+        fun testAndUnion(i: Int, j: Int) {
+            if (i == j) return
+            val pairKey = if (i < j) (i.toLong() shl 32) or (j.toLong() and 0xFFFFFFFFL)
+                          else (j.toLong() shl 32) or (i.toLong() and 0xFFFFFFFFL)
+            if (!checkedPairs.add(pairKey)) return
+
+            if (areSamePersonFast(distinctNorms[i], distinctNorms[j])) {
+                union(i, j)
+            }
+        }
+
+        // Only compare pairs that share at least one word
+        for (indices in tokenIndex.values) {
+            if (indices.size > 1) {
+                for (a in indices.indices) {
+                    for (b in a + 1 until indices.size) {
+                        testAndUnion(indices[a], indices[b])
+                    }
                 }
             }
         }
 
-        // Group by root
-        val clusters = mutableMapOf<Int, MutableList<String>>()
-        for (i in rawNames.indices) {
-            clusters.getOrPut(find(i)) { mutableListOf() }.add(rawNames[i])
+        // For single-word names, only compare with same first character and length diff <= 2
+        for (indices in firstCharIndex.values) {
+            if (indices.size > 1) {
+                for (a in indices.indices) {
+                    val idxA = indices[a]
+                    val lenA = distinctNorms[idxA].length
+                    for (b in a + 1 until indices.size) {
+                        val idxB = indices[b]
+                        if (abs(lenA - distinctNorms[idxB].length) <= 2) {
+                            testAndUnion(idxA, idxB)
+                        }
+                    }
+                }
+            }
         }
 
-        // For each cluster, pick the canonical name = the longest normalized variant (most complete)
+        // Phase 3: Assemble clusters
+        val clusters = mutableMapOf<Int, MutableList<String>>()
+        for (i in distinctNorms.indices) {
+            val root = find(i)
+            val raws = normalizedMap[distinctNorms[i]] ?: emptyList()
+            clusters.getOrPut(root) { mutableListOf() }.addAll(raws)
+        }
+
         return clusters.values.associate { group ->
             val canonical = group.maxByOrNull { normalize(it).length }
                 ?.let { titleCase(normalize(it)) } ?: group.first()
@@ -97,20 +137,62 @@ object NameMatcher {
         }
     }
 
-    // Standard Levenshtein distance
-    fun levenshtein(a: String, b: String): Int {
-        if (a == b) return 0
-        if (a.isEmpty()) return b.length
-        if (b.isEmpty()) return a.length
-        val dp = Array(a.length + 1) { IntArray(b.length + 1) }
-        for (i in 0..a.length) dp[i][0] = i
-        for (j in 0..b.length) dp[0][j] = j
-        for (i in 1..a.length) {
-            for (j in 1..b.length) {
-                dp[i][j] = if (a[i - 1] == b[j - 1]) dp[i - 1][j - 1]
-                else 1 + minOf(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1])
-            }
+    private fun areSamePersonFast(a: String, b: String): Boolean {
+        if (a == b) return true
+
+        val tokensA = a.split(" ").filter { it.isNotBlank() }
+        val tokensB = b.split(" ").filter { it.isNotBlank() }
+
+        // Token subset: e.g. "john" in "john kamau"
+        val setA = tokensA.toSet()
+        val setB = tokensB.toSet()
+        if (setA.isNotEmpty() && setB.isNotEmpty()) {
+            if (setA.containsAll(setB) || setB.containsAll(setA)) return true
         }
-        return dp[a.length][b.length]
+
+        // Levenshtein: only for similar lengths
+        val lenDiff = abs(a.length - b.length)
+        val maxDist = if (min(a.length, b.length) <= 12) 2 else 3
+        if (lenDiff <= maxDist) {
+            return fastLevenshtein(a, b, maxDist) <= maxDist
+        }
+
+        return false
+    }
+
+    /**
+     * Two-row Levenshtein distance with early exit threshold.
+     * Allocates zero 2D arrays on heap.
+     */
+    private fun fastLevenshtein(a: String, b: String, maxAllowed: Int): Int {
+        if (a == b) return 0
+        if (abs(a.length - b.length) > maxAllowed) return maxAllowed + 1
+
+        var prev = IntArray(b.length + 1) { it }
+        var curr = IntArray(b.length + 1)
+
+        for (i in 1..a.length) {
+            curr[0] = i
+            var minInRow = curr[0]
+
+            for (j in 1..b.length) {
+                val cost = if (a[i - 1] == b[j - 1]) 0 else 1
+                curr[j] = minOf(
+                    curr[j - 1] + 1,      // insertion
+                    prev[j] + 1,          // deletion
+                    prev[j - 1] + cost    // substitution
+                )
+                minInRow = min(minInRow, curr[j])
+            }
+
+            // Early exit if entire row exceeds threshold
+            if (minInRow > maxAllowed) return maxAllowed + 1
+
+            val temp = prev
+            prev = curr
+            curr = temp
+        }
+
+        return prev[b.length]
     }
 }

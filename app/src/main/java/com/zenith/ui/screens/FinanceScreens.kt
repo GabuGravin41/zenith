@@ -37,6 +37,10 @@ fun FinanceDashboardScreen(viewModel: MainViewModel, onNavigate: (String) -> Uni
     val isScanning by viewModel.isScanning.collectAsState()
     val pullToRefreshState = rememberPullToRefreshState()
 
+    val totalIn = remember(transactions) { transactions.filter { it.type == "CREDIT" }.sumOf { it.amount } }
+    val totalOut = remember(transactions) { transactions.filter { it.type == "DEBIT" }.sumOf { it.amount } }
+    val estimatedBalance = remember(totalIn, totalOut) { totalIn - totalOut }
+
     PullToRefreshBox(
         isRefreshing = isScanning,
         onRefresh = { viewModel.manualScanSms(fullScan = true) },
@@ -76,8 +80,7 @@ fun FinanceDashboardScreen(viewModel: MainViewModel, onNavigate: (String) -> Uni
 
         item {
             if (sourceBalances.isEmpty()) {
-                val balance = transactions.sumOf { if (it.type == "CREDIT") it.amount else -it.amount }
-                BalanceCard("Estimated Net", balance, isPrivacyMode)
+                BalanceCard("Estimated Net", estimatedBalance, isPrivacyMode)
             } else {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     items(sourceBalances.toList()) { (source, balance) ->
@@ -88,9 +91,6 @@ fun FinanceDashboardScreen(viewModel: MainViewModel, onNavigate: (String) -> Uni
         }
 
         item {
-            val totalIn = transactions.filter { it.type == "CREDIT" }.sumOf { it.amount }
-            val totalOut = transactions.filter { it.type == "DEBIT" }.sumOf { it.amount }
-            
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 SummaryCard("Income", totalIn, isPrivacyMode, Icons.Default.TrendingUp, Color(0xFF10B981), Modifier.weight(1f))
                 SummaryCard("Expenses", totalOut, isPrivacyMode, Icons.Default.TrendingDown, Color(0xFFEF4444), Modifier.weight(1f))

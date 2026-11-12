@@ -1,12 +1,20 @@
 package com.zenith.data.local
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.zenith.domain.model.Category
 import com.zenith.domain.model.TransactionSource
 import com.zenith.domain.model.TransactionType
 
-@Entity(tableName = "transactions")
+@Entity(
+    tableName = "transactions",
+    indices = [
+        Index(value = ["date"]),
+        Index(value = ["needsReview"]),
+        Index(value = ["partyName"])
+    ]
+)
 data class TransactionEntity(
     @PrimaryKey val id: String,
     val date: Long,

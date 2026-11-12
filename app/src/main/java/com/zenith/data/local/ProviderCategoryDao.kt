@@ -11,6 +11,9 @@ interface ProviderCategoryDao {
     @Query("SELECT * FROM provider_categories")
     fun getAllProviderCategories(): Flow<List<ProviderCategory>>
 
+    @Query("SELECT * FROM provider_categories")
+    suspend fun getAllCategoriesList(): List<ProviderCategory>
+
     @Query("SELECT category FROM provider_categories WHERE providerName = :name LIMIT 1")
     suspend fun getCategoryForProvider(name: String): String?
 

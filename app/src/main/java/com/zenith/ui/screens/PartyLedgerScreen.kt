@@ -29,7 +29,8 @@ private data class PartyEntry(
     val name: String,
     val sent: Double,
     val received: Double,
-    val net: Double          // positive = they owe you, negative = you owe them
+    val net: Double,          // positive = they owe you, negative = you owe them
+    val recentTxs: List<TransactionEntity> = emptyList()
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -80,7 +81,8 @@ fun PartyLedgerScreen(
             val allTx = variants.flatMap { rawMap[it] ?: emptyList() }
             val sent     = allTx.filter { it.type == "DEBIT"  }.sumOf { it.amount }
             val received = allTx.filter { it.type == "CREDIT" }.sumOf { it.amount }
-            PartyEntry(name = canonical, sent = sent, received = received, net = sent - received)
+            val recent   = allTx.sortedByDescending { it.date }.take(5)
+            PartyEntry(name = canonical, sent = sent, received = received, net = sent - received, recentTxs = recent)
         }.sortedByDescending { abs(it.net) }
     }
 
@@ -289,13 +291,7 @@ fun PartyLedgerScreen(
                                         Spacer(Modifier.height(6.dp))
 
                                         val sdf = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
-                                        val partyTxs = transactions.filter { tx ->
-                                            val nameMatch = tx.partyName?.equals(entry.name, ignoreCase = true) == true
-                                            val descMatch = tx.description.contains(entry.name, ignoreCase = true)
-                                            nameMatch || descMatch
-                                        }.take(5)
-
-                                        partyTxs.forEach { tx ->
+                                        entry.recentTxs.forEach { tx ->
                                             Row(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
