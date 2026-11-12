@@ -1,0 +1,118 @@
+**Here's the real, no-formality plan for your personal life management app.** I'll call it **"MyOS"** for now (you can rename it). This is written conversationally because we're exploring and building something that actually solves *your* pain.
+
+### The Vision & Why This Matters
+You're drowning in SMS clutter (M-Pesa, Equity Bank), WhatsApp media bloat, missed calls, forgotten payments, and scattered thoughts. The goal is a single private app on *your* phone that acts as your external brain:
+
+- Tracks every shilling you spend/receive from messages.
+- Gives smart advice like a personal financial advisor.
+- Cleans up your storage and data noise.
+- Handles simple repetitive tasks (posting, sharing) so you don't have to.
+- Reminds you about life admin without you chasing it.
+
+**Core philosophy**: Everything stays on your device as much as possible. OpenRouter only gets what you explicitly send. It's for *you* — sideloading is fine, no Play Store drama. We prioritize **reliability for your specific habits** over generality.
+
+This is ambitious, but we build it incrementally so you get value early (especially on finances) while the rest grows.
+
+### Recommended Tech Stack (My Honest Pick)
+**Kotlin + Jetpack Compose (Android native)** — this is the winner for your needs.
+
+**Why Kotlin/Compose over Flutter?**
+- Best integration with Android system features: SMS, Accessibility Service, Storage Access, Call Logs, Notifications, WorkManager (scheduling). Flutter can do most but feels clunkier and has more friction for deep system access.
+- Excellent performance for background tasks and local AI.
+- Beautiful, modern UI that's easy to make responsive and nice (you mentioned wanting a good interface).
+- Mature tools: Room (database), DataStore, Coil (images), Accompanist libraries, etc.
+- Easier long-term maintenance for a complex personal app.
+
+**AI Stack**:
+- **Primary**: OpenRouter (you already chose this — flexible, good models, pay-as-you-go).
+- **Local fallback**: Smaller models (Gemma 2B/7B or similar) via MLC LLM or LLM Hub-style integration for offline/quick tasks.
+- RAG setup so the AI can query your local encrypted database (spending history, notes, etc.) without sending everything.
+
+**Other tools**:
+- Room + SQLCipher → encrypted local DB.
+- WorkManager + AlarmManager → reminders/scheduled posts.
+- Accessibility Service → UI automation.
+- Retrofit/Moshi → OpenRouter calls.
+- Speech-to-Text (Android built-in) for voice input.
+
+This stack minimizes headaches for deep phone integration. You'll move faster on the parts that matter most (SMS finance + automation).
+
+### High-Level Architecture
+- **Core Layer**: Database + parsers (SMS, storage scanner).
+- **AI Brain**: Central chat that has context and can call tools (e.g., "analyze spending", "draft post", "clean WhatsApp media").
+- **Automation Layer**: Accessibility Service + workflows.
+- **UI Layer**: Clean dashboard + chat + settings.
+
+All data encrypted locally. OpenRouter calls are logged and optional.
+
+### Phased Build Plan (Realistic & Reliable)
+
+**Phase 0: Setup & Foundations (1-2 weeks)**
+- Empty Android project in Kotlin/Compose.
+- Basic navigation (dashboard, chat, finance, settings).
+- Permissions handling (SMS, Storage, etc.) with clear explanations.
+- Encrypted Room database.
+- OpenRouter integration + simple chat that can answer questions.
+
+*Why reliable?* Pure setup work. No complex features yet.
+
+**Phase 1: Finance Core (Highest Priority — 2-4 weeks)**
+- Background SMS scanner (or manual import).
+- Parser for M-Pesa & Equity messages → extract amount, date, party, balance, type.
+- Store transactions cleanly.
+- Dashboard: spending charts, categories, trends, balances.
+- Basic categorization rules first, then AI refinement.
+- AI chat: "Show me food spending last month", "How can I reduce expenses?", "What are my top 5 spending leaks?"
+
+*Why this stage is reliable*: SMS parsing is straightforward with regex + patterns. You control the data source. Quick wins here will motivate you heavily. This alone will reduce your financial panic.
+
+**Phase 2: Central AI Agent & Reminders (2-3 weeks)**
+- Make the chat "remember" your finances and preferences.
+- Add reminders system (dues, bills based on patterns, missed calls).
+- Simple RAG over your data.
+- Voice input.
+
+*Reliable because*: Mostly local + OpenRouter. No heavy automation yet.
+
+**Phase 3: Data Hygiene & WhatsApp Tools (2-4 weeks)**
+- Scan WhatsApp media folders.
+- Group by sender/group → show storage usage.
+- Bulk delete selected groups' media.
+- Option to disable auto-download (open WhatsApp settings or guide you).
+
+*Reliable*: Storage access is standard. No real-time message reading needed initially.
+
+**Phase 4: UI Automation & Posting (3-6+ weeks — iterative)**
+- Implement Accessibility Service.
+- Build simple, reliable workflows for your exact flows (Snapchat sharing, LinkedIn posting).
+- Human-like delays + confirmation screens.
+- AI draft → review → schedule/post.
+- For LinkedIn: Research → draft → images → schedule.
+
+*Challenges & realism*: This is the trickiest. App updates can break flows, but since your usage is simple and consistent, we can make it robust for *your* phone. Start with one workflow (e.g. Snapchat), test heavily, then expand. Always keep manual fallback.
+
+**Phase 5: Polish & Expansion**
+- Better local AI.
+- Call scripts, response drafting.
+- More social integrations.
+- Export reports, etc.
+
+### Honest Risks & Open Questions
+- Accessibility automation can be flaky after app updates — we'll add logging and easy "re-record workflow" ideas.
+- Battery drain from background scanning — we'll optimize aggressively.
+- OpenRouter costs — start small; finance analysis won't be token-heavy.
+- I don't know exactly how stable Snapchat workflows will be until we prototype — that's why we do finance first.
+
+### My Suggestions for You Right Now
+1. Set up the Kotlin/Compose project.
+2. Focus 100% on Phase 1 (Finance) until you have daily value.
+3. Test SMS parsing on your real messages early.
+4. Keep a simple "ideas & bugs" note — we'll adapt as we go.
+
+This isn't a rigid spec — it's a living exploration. We can change direction anytime (e.g., try Flutter if Compose feels off, or adjust automation depth).
+
+What do you want to dive into first? Project setup steps? Sample SMS parser code? UI ideas? Accessibility Service basics? Or something else?
+
+I'm here to iterate with you until it feels right. Let's make this thing actually solve your pain.
+
+we will strictly convert whatever code we have to kotling and use kotlin.

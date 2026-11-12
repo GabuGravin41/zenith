@@ -1,0 +1,2854 @@
+# Workspace
+
+## Overview
+
+pnpm workspace monorepo using TypeScript. Personal finance assistant mobile app for Kenya (M-Pesa + Equity Bank).
+
+## Stack
+
+- **Monorepo tool**: pnpm workspaces
+- **Node.js version**: 24
+- **Package manager**: pnpm
+- **TypeScript version**: 5.9
+- **API framework**: Express 5
+- **Database**: PostgreSQL + Drizzle ORM
+- **Validation**: Zod (`zod/v4`), `drizzle-zod`
+- **API codegen**: Orval (from OpenAPI spec)
+- **Build**: esbuild (CJS bundle)
+- **AI**: OpenAI via Replit AI Integrations (env: AI_INTEGRATIONS_OPENAI_BASE_URL, AI_INTEGRATIONS_OPENAI_API_KEY)
+
+## Artifacts
+
+### finance-app (Expo mobile app — primary artifact, previewPath: /)
+Personal finance tracker for Kenya. Parses M-Pesa and Equity Bank SMS messages, categorizes spending, and provides AI-powered analysis.
+
+**Screens:**
+- `app/(tabs)/index.tsx` — Dashboard: balance, summary cards, recent transactions
+- `app/(tabs)/transactions.tsx` — Full transaction list with search and filter
+- `app/(tabs)/analytics.tsx` — Spending by category charts, period filtering
+- `app/(tabs)/assistant.tsx` — Streaming AI chat powered by GPT
+- `app/import.tsx` — SMS import screen (paste M-Pesa / Equity SMS text)
+
+**Key files:**
+- `types/finance.ts` — Transaction, Category, ChatMessage types
+- `utils/smsParser.ts` — Parses M-Pesa, Equity Bank, KCB, Co-op SMS formats
+- `utils/categories.ts` — Category definitions and keyword-based classifier
+- `context/FinanceContext.tsx` — Global state with AsyncStorage persistence
+
+### api-server (Express backend — previewPath: /api)
+- `src/routes/ai.ts` — `POST /api/ai/chat` streaming SSE endpoint using OpenAI
+
+## Key Commands
+
+- `pnpm run typecheck` — full typecheck across all packages
+- `pnpm run build` — typecheck + build all packages
+- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from OpenAPI spec
+- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
+- `pnpm --filter @workspace/api-server run dev` — run API server locally
+
+See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
+import { Feather } from "@expo/vector-icons";
+import React from "react";
+import { StyleSheet, Text, View } from "react-native";
+import { CATEGORY_META } from "@/utils/categories";
+import { Category } from "@/types/finance";
+
+interface Props {
+  category: Category;
+  size?: "sm" | "md";
+}
+
+export function CategoryBadge({ category, size = "md" }: Props) {
+  const meta = CATEGORY_META[category];
+  const isSmall = size === "sm";
+
+  return (
+    <View
+      style={[
+        styles.badge,
+        {
+          backgroundColor: meta.color + "1A",
+          paddingHorizontal: isSmall ? 8 : 10,
+          paddingVertical: isSmall ? 3 : 5,
+          gap: isSmall ? 4 : 5,
+        },
+      ]}
+    >
+      <Feather
+        name={meta.icon as keyof typeof Feather.glyphMap}
+        size={isSmall ? 10 : 12}
+        color={meta.color}
+      />
+      <Text
+        style={[
+          styles.label,
+          { color: meta.color, fontSize: isSmall ? 10 : 12 },
+        ]}
+      >
+        {meta.label}
+      </Text>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  badge: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 100,
+    alignSelf: "flex-start",
+  },
+  label: {
+    fontFamily: "Inter_500Medium",
+  },
+});
+import React, { Component, ComponentType, PropsWithChildren } from "react";
+
+import { ErrorFallback, ErrorFallbackProps } from "@/components/ErrorFallback";
+
+export type ErrorBoundaryProps = PropsWithChildren<{
+  FallbackComponent?: ComponentType<ErrorFallbackProps>;
+  onError?: (error: Error, stackTrace: string) => void;
+}>;
+
+type ErrorBoundaryState = { error: Error | null };
+
+/**
+ * This is a special case for for using the class components. Error boundaries must be class components because React only provides error boundary functionality through lifecycle methods (componentDidCatch and getDerivedStateFromError) which are not available in functional components.
+ * https://react.dev/reference/react/Component#catching-rendering-errors-with-an-error-boundary
+ */
+export class ErrorBoundary extends Component<
+  ErrorBoundaryProps,
+  ErrorBoundaryState
+> {
+  state: ErrorBoundaryState = { error: null };
+
+  static defaultProps: {
+    FallbackComponent: ComponentType<ErrorFallbackProps>;
+  } = {
+    FallbackComponent: ErrorFallback,
+  };
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: { componentStack: string }): void {
+    if (typeof this.props.onError === "function") {
+      this.props.onError(error, info.componentStack);
+    }
+  }
+
+  resetError = (): void => {
+    this.setState({ error: null });
+  };
+
+  render() {
+    const { FallbackComponent } = this.props;
+
+    return this.state.error && FallbackComponent ? (
+      <FallbackComponent
+        error={this.state.error}
+        resetError={this.resetError}
+      />
+    ) : (
+      this.props.children
+    );
+  }
+}
+import { Feather } from "@expo/vector-icons";
+import { reloadAppAsync } from "expo";
+import React, { useState } from "react";
+import {
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+import { useColors } from "@/hooks/useColors";
+
+export type ErrorFallbackProps = {
+  error: Error;
+  resetError: () => void;
+};
+
+export function ErrorFallback({ error, resetError }: ErrorFallbackProps) {
+  const colors = useColors();
+  const insets = useSafeAreaInsets();
+
+  const [isModalVisible, setIsModalVisible] = useState(false);
+
+  const handleRestart = async () => {
+    try {
+      await reloadAppAsync();
+    } catch (restartError) {
+      console.error("Failed to restart app:", restartError);
+      resetError();
+    }
+  };
+
+  const formatErrorDetails = (): string => {
+    let details = `Error: ${error.message}\n\n`;
+    if (error.stack) {
+      details += `Stack Trace:\n${error.stack}`;
+    }
+    return details;
+  };
+
+  const monoFont = Platform.select({
+    ios: "Menlo",
+    android: "monospace",
+    default: "monospace",
+  });
+
+  return (
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      {__DEV__ ? (
+        <Pressable
+          onPress={() => setIsModalVisible(true)}
+          accessibilityLabel="View error details"
+          accessibilityRole="button"
+          style={({ pressed }) => [
+            styles.topButton,
+            {
+              top: insets.top + 16,
+              backgroundColor: colors.card,
+              opacity: pressed ? 0.8 : 1,
+            },
+          ]}
+        >
+          <Feather name="alert-circle" size={20} color={colors.foreground} />
+        </Pressable>
+      ) : null}
+
+      <View style={styles.content}>
+        <Text style={[styles.title, { color: colors.foreground }]}>
+          Something went wrong
+        </Text>
+
+        <Text style={[styles.message, { color: colors.mutedForeground }]}>
+          Please reload the app to continue.
+        </Text>
+
+        <Pressable
+          onPress={handleRestart}
+          style={({ pressed }) => [
+            styles.button,
+            {
+              backgroundColor: colors.primary,
+              opacity: pressed ? 0.9 : 1,
+              transform: [{ scale: pressed ? 0.98 : 1 }],
+            },
+          ]}
+        >
+          <Text
+            style={[
+              styles.buttonText,
+              { color: colors.primaryForeground },
+            ]}
+          >
+            Try Again
+          </Text>
+        </Pressable>
+      </View>
+
+      {__DEV__ ? (
+        <Modal
+          visible={isModalVisible}
+          animationType="slide"
+          transparent={true}
+          onRequestClose={() => setIsModalVisible(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View
+              style={[
+                styles.modalContainer,
+                { backgroundColor: colors.background },
+              ]}
+            >
+              <View
+                style={[
+                  styles.modalHeader,
+                  { borderBottomColor: colors.border },
+                ]}
+              >
+                <Text style={[styles.modalTitle, { color: colors.foreground }]}>
+                  Error Details
+                </Text>
+                <Pressable
+                  onPress={() => setIsModalVisible(false)}
+                  accessibilityLabel="Close error details"
+                  accessibilityRole="button"
+                  style={({ pressed }) => [
+                    styles.closeButton,
+                    { opacity: pressed ? 0.6 : 1 },
+                  ]}
+                >
+                  <Feather name="x" size={24} color={colors.foreground} />
+                </Pressable>
+              </View>
+
+              <ScrollView
+                style={styles.modalScrollView}
+                contentContainerStyle={[
+                  styles.modalScrollContent,
+                  { paddingBottom: insets.bottom + 16 },
+                ]}
+                showsVerticalScrollIndicator
+              >
+                <View
+                  style={[
+                    styles.errorContainer,
+                    { backgroundColor: colors.card },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.errorText,
+                      {
+                        color: colors.foreground,
+                        fontFamily: monoFont,
+                      },
+                    ]}
+                    selectable
+                  >
+                    {formatErrorDetails()}
+                  </Text>
+                </View>
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
+      ) : null}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    width: "100%",
+    height: "100%",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+  },
+  content: {
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 16,
+    width: "100%",
+    maxWidth: 600,
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: "700",
+    textAlign: "center",
+    lineHeight: 40,
+  },
+  message: {
+    fontSize: 16,
+    textAlign: "center",
+    lineHeight: 24,
+  },
+  topButton: {
+    position: "absolute",
+    right: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 10,
+  },
+  button: {
+    paddingVertical: 16,
+    borderRadius: 8,
+    paddingHorizontal: 24,
+    minWidth: 200,
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  buttonText: {
+    fontWeight: "600",
+    textAlign: "center",
+    fontSize: 16,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "flex-end",
+  },
+  modalContainer: {
+    width: "100%",
+    height: "90%",
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: "600",
+  },
+  closeButton: {
+    width: 44,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modalScrollView: {
+    flex: 1,
+  },
+  modalScrollContent: {
+    padding: 16,
+  },
+  errorContainer: {
+    width: "100%",
+    borderRadius: 8,
+    overflow: "hidden",
+    padding: 16,
+  },
+  errorText: {
+    fontSize: 12,
+    lineHeight: 18,
+    width: "100%",
+  },
+});
+import {
+  KeyboardAwareScrollView,
+  KeyboardAwareScrollViewProps,
+} from "react-native-keyboard-controller";
+import { Platform, ScrollView, ScrollViewProps } from "react-native";
+
+type Props = KeyboardAwareScrollViewProps & ScrollViewProps;
+
+export function KeyboardAwareScrollViewCompat({
+  children,
+  keyboardShouldPersistTaps = "handled",
+  ...props
+}: Props) {
+  if (Platform.OS === "web") {
+    return (
+      <ScrollView keyboardShouldPersistTaps={keyboardShouldPersistTaps} {...props}>
+        {children}
+      </ScrollView>
+    );
+  }
+  return (
+    <KeyboardAwareScrollView
+      keyboardShouldPersistTaps={keyboardShouldPersistTaps}
+      {...props}
+    >
+      {children}
+    </KeyboardAwareScrollView>
+  );
+}
+import React from "react";
+import { StyleSheet, Text, View } from "react-native";
+import { CATEGORY_META } from "@/utils/categories";
+import { CategorySummary } from "@/types/finance";
+import { useColors } from "@/hooks/useColors";
+
+interface Props {
+  data: CategorySummary[];
+}
+
+function formatAmount(amount: number): string {
+  if (amount >= 1_000_000) return `${(amount / 1_000_000).toFixed(1)}M`;
+  if (amount >= 1_000) return `${(amount / 1_000).toFixed(0)}K`;
+  return amount.toFixed(0);
+}
+
+export function SpendingChart({ data }: Props) {
+  const colors = useColors();
+  const maxAmount = Math.max(...data.map((d) => d.total), 1);
+
+  return (
+    <View style={styles.container}>
+      {data.map((item) => {
+        const meta = CATEGORY_META[item.category];
+        const barWidth = (item.total / maxAmount) * 100;
+
+        return (
+          <View key={item.category} style={styles.row}>
+            <Text style={[styles.label, { color: colors.foreground }]} numberOfLines={1}>
+              {meta.label}
+            </Text>
+            <View style={styles.barTrack}>
+              <View
+                style={[
+                  styles.barFill,
+                  {
+                    width: `${barWidth}%` as `${number}%`,
+                    backgroundColor: meta.color,
+                  },
+                ]}
+              />
+            </View>
+            <Text style={[styles.amount, { color: colors.mutedForeground }]}>
+              {formatAmount(item.total)}
+            </Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    gap: 14,
+  },
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  label: {
+    width: 90,
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+  },
+  barTrack: {
+    flex: 1,
+    height: 8,
+    backgroundColor: "#E2E8F0",
+    borderRadius: 4,
+    overflow: "hidden",
+  },
+  barFill: {
+    height: 8,
+    borderRadius: 4,
+    minWidth: 4,
+  },
+  amount: {
+    width: 42,
+    textAlign: "right",
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+  },
+});
+import { Feather } from "@expo/vector-icons";
+import React from "react";
+import { StyleSheet, Text, View } from "react-native";
+import { useColors } from "@/hooks/useColors";
+
+interface Props {
+  title: string;
+  amount: number;
+  icon: keyof typeof Feather.glyphMap;
+  iconColor?: string;
+  subtitle?: string;
+}
+
+function formatAmount(amount: number): string {
+  if (amount >= 1_000_000) {
+    return `${(amount / 1_000_000).toFixed(1)}M`;
+  }
+  if (amount >= 1_000) {
+    return `${(amount / 1_000).toFixed(1)}K`;
+  }
+  return amount.toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+export function SummaryCard({ title, amount, icon, iconColor, subtitle }: Props) {
+  const colors = useColors();
+  const color = iconColor ?? colors.primary;
+
+  return (
+    <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      <View style={[styles.iconWrap, { backgroundColor: color + "18" }]}>
+        <Feather name={icon} size={18} color={color} />
+      </View>
+      <Text style={[styles.title, { color: colors.mutedForeground }]}>{title}</Text>
+      <Text style={[styles.amount, { color: colors.foreground }]}>
+        Ksh {formatAmount(amount)}
+      </Text>
+      {subtitle ? (
+        <Text style={[styles.subtitle, { color: colors.mutedForeground }]}>{subtitle}</Text>
+      ) : null}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  card: {
+    flex: 1,
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    gap: 6,
+  },
+  iconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 4,
+  },
+  title: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    letterSpacing: 0.2,
+  },
+  amount: {
+    fontSize: 20,
+    fontFamily: "Inter_700Bold",
+    letterSpacing: -0.5,
+  },
+  subtitle: {
+    fontSize: 11,
+    fontFamily: "Inter_400Regular",
+  },
+});
+import { Feather } from "@expo/vector-icons";
+import React from "react";
+import { Pressable, StyleSheet, Text, View } from "react-native";
+import { CATEGORY_META } from "@/utils/categories";
+import { Transaction } from "@/types/finance";
+import { useColors } from "@/hooks/useColors";
+
+interface Props {
+  transaction: Transaction;
+  onPress?: () => void;
+}
+
+function formatAmount(amount: number): string {
+  return amount.toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function formatDate(date: Date): string {
+  const now = new Date();
+  const diff = now.getTime() - date.getTime();
+  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+
+  if (days === 0) return "Today";
+  if (days === 1) return "Yesterday";
+  if (days < 7) return `${days}d ago`;
+
+  return date.toLocaleDateString("en-KE", {
+    day: "numeric",
+    month: "short",
+    year: date.getFullYear() !== now.getFullYear() ? "numeric" : undefined,
+  });
+}
+
+export function TransactionCard({ transaction, onPress }: Props) {
+  const colors = useColors();
+  const meta = CATEGORY_META[transaction.category];
+  const isCredit = transaction.type === "credit";
+
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.container,
+        {
+          backgroundColor: colors.card,
+          borderColor: colors.border,
+          opacity: pressed ? 0.85 : 1,
+        },
+      ]}
+    >
+      <View style={[styles.iconWrap, { backgroundColor: meta.color + "20" }]}>
+        <Feather name={meta.icon as keyof typeof Feather.glyphMap} size={18} color={meta.color} />
+      </View>
+
+      <View style={styles.info}>
+        <Text style={[styles.description, { color: colors.foreground }]} numberOfLines={1}>
+          {transaction.description}
+        </Text>
+        <View style={styles.meta}>
+          <Text style={[styles.category, { color: colors.mutedForeground }]}>
+            {meta.label}
+          </Text>
+          <View style={styles.dot} />
+          <Text style={[styles.date, { color: colors.mutedForeground }]}>
+            {formatDate(transaction.date)}
+          </Text>
+          {transaction.source !== "manual" && (
+            <>
+              <View style={styles.dot} />
+              <Text style={[styles.source, { color: colors.mutedForeground }]}>
+                {transaction.source === "mpesa" ? "M-Pesa" : transaction.source === "equity" ? "Equity" : "Other"}
+              </Text>
+            </>
+          )}
+        </View>
+      </View>
+
+      <Text
+        style={[
+          styles.amount,
+          { color: isCredit ? colors.income : colors.expense },
+        ]}
+      >
+        {isCredit ? "+" : "-"}Ksh {formatAmount(transaction.amount)}
+      </Text>
+    </Pressable>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    gap: 12,
+  },
+  iconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  info: {
+    flex: 1,
+    gap: 3,
+  },
+  description: {
+    fontSize: 14,
+    fontFamily: "Inter_500Medium",
+  },
+  meta: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  category: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+  },
+  dot: {
+    width: 3,
+    height: 3,
+    borderRadius: 1.5,
+    backgroundColor: "#94A3B8",
+  },
+  date: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+  },
+  source: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+  },
+  amount: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+  },
+});
+import {
+  Inter_400Regular,
+  Inter_500Medium,
+  Inter_600SemiBold,
+  Inter_700Bold,
+  useFonts,
+} from "@expo-google-fonts/inter";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Stack } from "expo-router";
+import * as SplashScreen from "expo-splash-screen";
+import React, { useEffect } from "react";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { KeyboardProvider } from "react-native-keyboard-controller";
+import { SafeAreaProvider } from "react-native-safe-area-context";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { FinanceProvider } from "@/context/FinanceContext";
+import { setBaseUrl } from "@workspace/api-client-react";
+
+SplashScreen.preventAutoHideAsync();
+
+const queryClient = new QueryClient();
+
+if (process.env.EXPO_PUBLIC_DOMAIN) {
+  setBaseUrl(`https://${process.env.EXPO_PUBLIC_DOMAIN}`);
+}
+
+function RootLayoutNav() {
+  return (
+    <Stack screenOptions={{ headerBackTitle: "Back" }}>
+      <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack.Screen
+        name="import"
+        options={{
+          title: "Import SMS",
+          presentation: "modal",
+          headerStyle: { backgroundColor: "transparent" },
+        }}
+      />
+    </Stack>
+  );
+}
+
+export default function RootLayout() {
+  const [fontsLoaded, fontError] = useFonts({
+    Inter_400Regular,
+    Inter_500Medium,
+    Inter_600SemiBold,
+    Inter_700Bold,
+  });
+
+  useEffect(() => {
+    if (fontsLoaded || fontError) {
+      SplashScreen.hideAsync();
+    }
+  }, [fontsLoaded, fontError]);
+
+  if (!fontsLoaded && !fontError) return null;
+
+  return (
+    <SafeAreaProvider>
+      <ErrorBoundary>
+        <QueryClientProvider client={queryClient}>
+          <GestureHandlerRootView>
+            <KeyboardProvider>
+              <FinanceProvider>
+                <RootLayoutNav />
+              </FinanceProvider>
+            </KeyboardProvider>
+          </GestureHandlerRootView>
+        </QueryClientProvider>
+      </ErrorBoundary>
+    </SafeAreaProvider>
+  );
+}
+import { Link, Stack } from "expo-router";
+import { StyleSheet, Text, View } from "react-native";
+
+import { useColors } from "@/hooks/useColors";
+
+export default function NotFoundScreen() {
+  const colors = useColors();
+
+  return (
+    <>
+      <Stack.Screen options={{ title: "Oops!" }} />
+      <View style={[styles.container, { backgroundColor: colors.background }]}>
+        <Text style={[styles.title, { color: colors.foreground }]}>
+          This screen doesn&apos;t exist.
+        </Text>
+
+        <Link href="/" style={styles.link}>
+          <Text style={[styles.linkText, { color: colors.primary }]}>
+            Go to home screen!
+          </Text>
+        </Link>
+      </View>
+    </>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: "bold",
+  },
+  link: {
+    marginTop: 15,
+    paddingVertical: 15,
+  },
+  linkText: {
+    fontSize: 14,
+  },
+});
+import { Feather } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
+import { useRouter } from "expo-router";
+import React, { useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useFinance } from "@/context/FinanceContext";
+import { useColors } from "@/hooks/useColors";
+
+const MPESA_EXAMPLE = `QAZ123456 Confirmed. Ksh500 sent to JOHN DOE 0712345678 on 1/5/24 at 10:30 AM. New M-PESA balance is Ksh2,000.00.
+
+QAZ234567 Confirmed. You have received Ksh1,000 from JANE WANJIKU 0787654321 on 2/5/24 at 2:15 PM. New M-PESA balance is Ksh3,000.00.
+
+QAZ345678 Confirmed.Ksh150 paid to JAVA HOUSE NAIROBI. on 3/5/24 at 8:00 AM.New M-PESA balance is Ksh2,850.00.`;
+
+export default function ImportScreen() {
+  const colors = useColors();
+  const insets = useSafeAreaInsets();
+  const router = useRouter();
+  const { importSms } = useFinance();
+  const [text, setText] = useState("");
+  const [importing, setImporting] = useState(false);
+
+  async function handleImport() {
+    if (!text.trim()) {
+      Alert.alert("No text", "Please paste your SMS messages first.");
+      return;
+    }
+    setImporting(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    try {
+      const { added, unparsed } = await importSms(text);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert(
+        "Import Complete",
+        added > 0
+          ? `Successfully imported ${added} transaction${added !== 1 ? "s" : ""}. ${unparsed > 0 ? `${unparsed} message${unparsed !== 1 ? "s" : ""} could not be parsed.` : ""}`
+          : "No transactions could be parsed. Make sure you pasted valid M-Pesa or Equity Bank messages.",
+        [{ text: "Done", onPress: () => router.back() }]
+      );
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  function handleExample() {
+    setText(MPESA_EXAMPLE);
+  }
+
+  const paddingTop = Platform.OS === "web" ? 67 : insets.top + 16;
+  const paddingBottom = Platform.OS === "web" ? 34 : insets.bottom + 20;
+
+  return (
+    <ScrollView
+      style={[styles.screen, { backgroundColor: colors.background }]}
+      contentContainerStyle={{ paddingTop, paddingBottom }}
+      keyboardShouldPersistTaps="handled"
+    >
+      <View style={styles.header}>
+        <Text style={[styles.title, { color: colors.foreground }]}>Import SMS Messages</Text>
+        <Text style={[styles.subtitle, { color: colors.mutedForeground }]}>
+          Paste your M-Pesa or Equity Bank SMS messages below. Separate multiple messages with blank lines.
+        </Text>
+      </View>
+
+      <View style={styles.howSection}>
+        <Text style={[styles.sectionLabel, { color: colors.foreground }]}>
+          How to export SMS on Android
+        </Text>
+        {[
+          "Open your Messages app",
+          "Long-press an M-Pesa or Equity message",
+          "Select all similar messages & copy",
+          'Or use "SMS Backup & Restore" app to export',
+          "Paste the copied text below",
+        ].map((step, i) => (
+          <View key={i} style={styles.step}>
+            <View style={[styles.stepNum, { backgroundColor: colors.primary }]}>
+              <Text style={styles.stepNumText}>{i + 1}</Text>
+            </View>
+            <Text style={[styles.stepText, { color: colors.mutedForeground }]}>{step}</Text>
+          </View>
+        ))}
+      </View>
+
+      <View style={styles.inputSection}>
+        <View style={styles.inputHeader}>
+          <Text style={[styles.sectionLabel, { color: colors.foreground }]}>
+            Paste SMS Messages
+          </Text>
+          <Pressable onPress={handleExample}>
+            <Text style={[styles.exampleBtn, { color: colors.primary }]}>Try example</Text>
+          </Pressable>
+        </View>
+
+        <TextInput
+          style={[
+            styles.textArea,
+            {
+              backgroundColor: colors.card,
+              borderColor: colors.border,
+              color: colors.foreground,
+            },
+          ]}
+          multiline
+          numberOfLines={10}
+          placeholder="Paste your SMS messages here..."
+          placeholderTextColor={colors.mutedForeground}
+          value={text}
+          onChangeText={setText}
+          textAlignVertical="top"
+        />
+
+        {text.length > 0 && (
+          <Text style={[styles.charCount, { color: colors.mutedForeground }]}>
+            {text.length} characters
+          </Text>
+        )}
+      </View>
+
+      <View style={styles.supported}>
+        <Text style={[styles.sectionLabel, { color: colors.foreground }]}>
+          Supported formats
+        </Text>
+        <View style={styles.sourceRow}>
+          {[
+            { name: "M-Pesa", color: "#00897B" },
+            { name: "Equity Bank", color: "#D32F2F" },
+            { name: "KCB M-Pesa", color: "#1565C0" },
+            { name: "Co-op Bank", color: "#2E7D32" },
+          ].map((s) => (
+            <View key={s.name} style={[styles.sourceBadge, { backgroundColor: s.color + "18", borderColor: s.color + "30" }]}>
+              <Feather name="check" size={11} color={s.color} />
+              <Text style={[styles.sourceBadgeText, { color: s.color }]}>{s.name}</Text>
+            </View>
+          ))}
+        </View>
+      </View>
+
+      <Pressable
+        onPress={handleImport}
+        disabled={importing || !text.trim()}
+        style={[
+          styles.importBtn,
+          {
+            backgroundColor:
+              importing || !text.trim() ? colors.muted : colors.primary,
+          },
+        ]}
+      >
+        {importing ? (
+          <ActivityIndicator color="#fff" />
+        ) : (
+          <>
+            <Feather name="upload" size={18} color={importing || !text.trim() ? colors.mutedForeground : "#fff"} />
+            <Text
+              style={[
+                styles.importBtnText,
+                { color: importing || !text.trim() ? colors.mutedForeground : "#fff" },
+              ]}
+            >
+              Import Transactions
+            </Text>
+          </>
+        )}
+      </Pressable>
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+  },
+  header: {
+    paddingHorizontal: 20,
+    marginBottom: 24,
+    gap: 8,
+  },
+  title: {
+    fontSize: 22,
+    fontFamily: "Inter_700Bold",
+    letterSpacing: -0.5,
+  },
+  subtitle: {
+    fontSize: 14,
+    fontFamily: "Inter_400Regular",
+    lineHeight: 21,
+  },
+  howSection: {
+    paddingHorizontal: 20,
+    marginBottom: 24,
+    gap: 12,
+  },
+  sectionLabel: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+    marginBottom: 4,
+  },
+  step: {
+    flexDirection: "row",
+    gap: 12,
+    alignItems: "flex-start",
+  },
+  stepNum: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 1,
+  },
+  stepNumText: {
+    color: "#fff",
+    fontSize: 11,
+    fontFamily: "Inter_700Bold",
+  },
+  stepText: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: "Inter_400Regular",
+    lineHeight: 22,
+  },
+  inputSection: {
+    paddingHorizontal: 20,
+    marginBottom: 24,
+    gap: 8,
+  },
+  inputHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  exampleBtn: {
+    fontSize: 13,
+    fontFamily: "Inter_500Medium",
+  },
+  textArea: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 14,
+    fontSize: 13,
+    fontFamily: "Inter_400Regular",
+    minHeight: 200,
+    lineHeight: 20,
+  },
+  charCount: {
+    fontSize: 11,
+    fontFamily: "Inter_400Regular",
+    textAlign: "right",
+  },
+  supported: {
+    paddingHorizontal: 20,
+    marginBottom: 24,
+    gap: 10,
+  },
+  sourceRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  sourceBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 100,
+    borderWidth: 1,
+  },
+  sourceBadgeText: {
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+  },
+  importBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    marginHorizontal: 20,
+    paddingVertical: 16,
+    borderRadius: 14,
+  },
+  importBtnText: {
+    fontSize: 16,
+    fontFamily: "Inter_600SemiBold",
+  },
+});
+import { useColorScheme } from "react-native";
+
+import colors from "@/constants/colors";
+
+/**
+ * Returns the design tokens for the current color scheme.
+ *
+ * The returned object contains all color tokens for the active palette
+ * plus scheme-independent values like `radius`.
+ *
+ * Falls back to the light palette when no dark key is defined in
+ * constants/colors.ts (the scaffold ships light-only by default).
+ * When a sibling web artifact's dark tokens are synced into a `dark`
+ * key, this hook will automatically switch palettes based on the
+ * device's appearance setting.
+ */
+export function useColors() {
+  const scheme = useColorScheme();
+  const palette =
+    scheme === "dark" && "dark" in colors
+      ? (colors as Record<string, typeof colors.light>).dark
+      : colors.light;
+  return { ...palette, radius: colors.radius };
+}
+const fs = require("fs");
+const path = require("path");
+const { spawn } = require("child_process");
+const { Readable } = require("stream");
+const { pipeline } = require("stream/promises");
+
+let metroProcess = null;
+
+const projectRoot = path.resolve(__dirname, "..");
+
+function findWorkspaceRoot(startDir) {
+  let dir = startDir;
+  while (dir !== path.dirname(dir)) {
+    if (fs.existsSync(path.join(dir, "pnpm-workspace.yaml"))) {
+      return dir;
+    }
+    dir = path.dirname(dir);
+  }
+  throw new Error("Could not find workspace root (no pnpm-workspace.yaml found)");
+}
+
+const workspaceRoot = findWorkspaceRoot(projectRoot);
+const basePath = (process.env.BASE_PATH || "/").replace(/\/+$/, "");
+
+function exitWithError(message) {
+  console.error(message);
+  if (metroProcess) {
+    metroProcess.kill();
+  }
+  process.exit(1);
+}
+
+function setupSignalHandlers() {
+  const cleanup = () => {
+    if (metroProcess) {
+      console.log("Cleaning up Metro process...");
+      metroProcess.kill();
+    }
+    process.exit(0);
+  };
+
+  process.on("SIGINT", cleanup);
+  process.on("SIGTERM", cleanup);
+  process.on("SIGHUP", cleanup);
+}
+
+function stripProtocol(domain) {
+  let urlString = domain.trim();
+
+  if (!/^https?:\/\//i.test(urlString)) {
+    urlString = `https://${urlString}`;
+  }
+
+  return new URL(urlString).host;
+}
+
+function getDeploymentDomain() {
+  if (process.env.REPLIT_INTERNAL_APP_DOMAIN) {
+    return stripProtocol(process.env.REPLIT_INTERNAL_APP_DOMAIN);
+  }
+
+  if (process.env.REPLIT_DEV_DOMAIN) {
+    return stripProtocol(process.env.REPLIT_DEV_DOMAIN);
+  }
+
+  if (process.env.EXPO_PUBLIC_DOMAIN) {
+    return stripProtocol(process.env.EXPO_PUBLIC_DOMAIN);
+  }
+
+  console.error(
+    "ERROR: No deployment domain found. Set REPLIT_INTERNAL_APP_DOMAIN, REPLIT_DEV_DOMAIN, or EXPO_PUBLIC_DOMAIN",
+  );
+  process.exit(1);
+}
+
+function prepareDirectories(timestamp) {
+  console.log("Preparing build directories...");
+
+  const staticBuild = path.join(projectRoot, "static-build");
+  if (fs.existsSync(staticBuild)) {
+    fs.rmSync(staticBuild, { recursive: true });
+  }
+
+  const dirs = [
+    path.join(staticBuild, timestamp, "_expo", "static", "js", "ios"),
+    path.join(staticBuild, timestamp, "_expo", "static", "js", "android"),
+    path.join(staticBuild, "ios"),
+    path.join(staticBuild, "android"),
+  ];
+
+  for (const dir of dirs) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+
+  console.log("Build:", timestamp);
+}
+
+function clearMetroCache() {
+  console.log("Clearing Metro cache...");
+
+  const cacheDirs = [
+    path.join(projectRoot, ".metro-cache"),
+    path.join(projectRoot, "node_modules/.cache/metro"),
+  ];
+
+  for (const dir of cacheDirs) {
+    if (fs.existsSync(dir)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  console.log("Cache cleared");
+}
+
+async function checkMetroHealth() {
+  try {
+    const response = await fetch("http://localhost:8081/status", {
+      signal: AbortSignal.timeout(5000),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+function getExpoPublicReplId() {
+  return process.env.REPL_ID || process.env.EXPO_PUBLIC_REPL_ID;
+}
+
+async function startMetro(expoPublicDomain, expoPublicReplId) {
+  const isRunning = await checkMetroHealth();
+  if (isRunning) {
+    console.log("Metro already running");
+    return;
+  }
+
+  console.log("Starting Metro...");
+  console.log(`Setting EXPO_PUBLIC_DOMAIN=${expoPublicDomain}`);
+  const env = {
+    ...process.env,
+    EXPO_PUBLIC_DOMAIN: expoPublicDomain,
+    EXPO_PUBLIC_REPL_ID: expoPublicReplId,
+  };
+
+  if (expoPublicReplId) {
+    console.log(`Setting EXPO_PUBLIC_REPL_ID=${expoPublicReplId}`);
+  }
+
+  metroProcess = spawn(
+    "pnpm",
+    [
+      "exec",
+      "expo",
+      "start",
+      "--no-dev",
+      "--minify",
+      "--localhost",
+    ],
+    {
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: false,
+      cwd: projectRoot,
+      env,
+    },
+  );
+
+  if (metroProcess.stdout) {
+    metroProcess.stdout.on("data", (data) => {
+      const output = data.toString().trim();
+      if (output) console.log(`[Metro] ${output}`);
+    });
+  }
+  if (metroProcess.stderr) {
+    metroProcess.stderr.on("data", (data) => {
+      const output = data.toString().trim();
+      if (output) console.error(`[Metro Error] ${output}`);
+    });
+  }
+
+  for (let i = 0; i < 60; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    const healthy = await checkMetroHealth();
+    if (healthy) {
+      console.log("Metro ready");
+      return;
+    }
+  }
+
+  console.error("Metro timeout");
+  process.exit(1);
+}
+
+async function downloadFile(url, outputPath) {
+  const controller = new AbortController();
+  const fiveMinMS = 5 * 60 * 1_000;
+  const timeoutId = setTimeout(() => controller.abort(), fiveMinMS);
+
+  try {
+    console.log(`Downloading: ${url}`);
+    const response = await fetch(url, { signal: controller.signal });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const file = fs.createWriteStream(outputPath);
+    await pipeline(Readable.fromWeb(response.body), file);
+
+    const fileSize = fs.statSync(outputPath).size;
+
+    if (fileSize === 0) {
+      fs.unlinkSync(outputPath);
+      throw new Error("Downloaded file is empty");
+    }
+  } catch (error) {
+    if (fs.existsSync(outputPath)) {
+      fs.unlinkSync(outputPath);
+    }
+
+    if (error.name === "AbortError") {
+      throw new Error(`Download timeout after 5m: ${url}`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function downloadBundle(platform, timestamp) {
+  const entryPath = path.resolve(projectRoot, "node_modules", "expo-router", "entry");
+  const bundlePath = path.relative(workspaceRoot, entryPath);
+  const url = new URL(`http://localhost:8081/${bundlePath}.bundle`);
+  url.searchParams.set("platform", platform);
+  url.searchParams.set("dev", "false");
+  url.searchParams.set("hot", "false");
+  url.searchParams.set("lazy", "false");
+  url.searchParams.set("minify", "true");
+
+  const output = path.join(
+    "static-build",
+    timestamp,
+    "_expo",
+    "static",
+    "js",
+    platform,
+    "bundle.js",
+  );
+
+  console.log(`Fetching ${platform} bundle...`);
+  await downloadFile(url.toString(), output);
+  console.log(`${platform} bundle ready`);
+}
+
+async function downloadManifest(platform) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 300_000);
+
+  try {
+    console.log(`Fetching ${platform} manifest...`);
+    const response = await fetch("http://localhost:8081/manifest", {
+      headers: { "expo-platform": platform },
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const manifest = await response.json();
+    console.log(`${platform} manifest ready`);
+    return manifest;
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error(
+        `Manifest download timeout after 5m for platform: ${platform}`,
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function downloadBundlesAndManifests(timestamp) {
+  console.log("Downloading bundles and manifests...");
+  console.log("This may take several minutes for production builds...");
+
+  try {
+    // Bundles are sequential — Metro can't handle both platforms simultaneously
+    // without stalling. Manifests are cheap and run in parallel after.
+    await downloadBundle("ios", timestamp);
+    await downloadBundle("android", timestamp);
+
+    const [iosManifest, androidManifest] = await Promise.all([
+      downloadManifest("ios"),
+      downloadManifest("android"),
+    ]);
+
+    console.log("All downloads completed successfully");
+    return { ios: iosManifest, android: androidManifest };
+  } catch (error) {
+    exitWithError(`Download failed: ${error.message}`);
+  }
+}
+
+function extractAssets(timestamp) {
+  const staticBuild = path.join(projectRoot, "static-build");
+  const bundles = {
+    ios: fs.readFileSync(
+      path.join(staticBuild, timestamp, "_expo", "static", "js", "ios", "bundle.js"),
+      "utf-8",
+    ),
+    android: fs.readFileSync(
+      path.join(staticBuild, timestamp, "_expo", "static", "js", "android", "bundle.js"),
+      "utf-8",
+    ),
+  };
+
+  const assetsMap = new Map();
+  const assetPattern =
+    /httpServerLocation:"([^"]+)"[^}]*hash:"([^"]+)"[^}]*name:"([^"]+)"[^}]*type:"([^"]+)"/g;
+
+  const extractFromBundle = (bundle, platform) => {
+    for (const match of bundle.matchAll(assetPattern)) {
+      const originalPath = match[1];
+      const filename = match[3] + "." + match[4];
+
+      const tempUrl = new URL(`http://localhost:8081${originalPath}`);
+      const unstablePath = tempUrl.searchParams.get("unstable_path");
+
+      if (!unstablePath) {
+        throw new Error(`Asset missing unstable_path: ${originalPath}`);
+      }
+
+      const decodedPath = decodeURIComponent(unstablePath);
+      const key = path.posix.join(decodedPath, filename);
+
+      if (!assetsMap.has(key)) {
+        const asset = {
+          url: path.posix.join("/", decodedPath, filename),
+          originalPath: originalPath,
+          filename: filename,
+          relativePath: decodedPath,
+          hash: match[2],
+          platforms: new Set(),
+        };
+
+        assetsMap.set(key, asset);
+      }
+      assetsMap.get(key).platforms.add(platform);
+    }
+  };
+
+  extractFromBundle(bundles.ios, "ios");
+  extractFromBundle(bundles.android, "android");
+
+  return Array.from(assetsMap.values());
+}
+
+async function downloadAssets(assets, timestamp) {
+  if (assets.length === 0) {
+    return 0;
+  }
+
+  console.log("Copying assets...");
+  let successCount = 0;
+  const failures = [];
+
+  const downloadPromises = assets.map(async (asset) => {
+    const tempUrl = new URL(`http://localhost:8081${asset.originalPath}`);
+    const unstablePath = tempUrl.searchParams.get("unstable_path");
+
+    if (!unstablePath) {
+      throw new Error(`Asset missing unstable_path: ${asset.originalPath}`);
+    }
+
+    const decodedPath = decodeURIComponent(unstablePath);
+
+    const outputDir = path.join(
+      projectRoot,
+      "static-build",
+      timestamp,
+      "_expo",
+      "static",
+      "js",
+      asset.relativePath,
+    );
+    fs.mkdirSync(outputDir, { recursive: true });
+    const output = path.join(outputDir, asset.filename);
+
+    try {
+      const candidates = [
+        path.join(projectRoot, decodedPath, asset.filename),
+        path.join(workspaceRoot, decodedPath, asset.filename),
+      ];
+      const found = candidates.find((p) => fs.existsSync(p));
+      if (!found) {
+        throw new Error(`Asset not found on disk: ${asset.filename}`);
+      }
+      fs.copyFileSync(found, output);
+      successCount++;
+    } catch (error) {
+      failures.push({
+        filename: asset.filename,
+        error: error.message,
+        url: asset.originalPath,
+      });
+    }
+  });
+
+  await Promise.all(downloadPromises);
+
+  if (failures.length > 0) {
+    const errorMsg =
+      `Failed to download ${failures.length} asset(s):\n` +
+      failures
+        .map((f) => `  - ${f.filename}: ${f.error} (${f.url})`)
+        .join("\n");
+    exitWithError(errorMsg);
+  }
+
+  console.log(`Copied ${successCount} assets`);
+  return successCount;
+}
+
+function updateBundleUrls(timestamp, baseUrl) {
+  const updateForPlatform = (platform) => {
+    const bundlePath = path.join(
+      projectRoot,
+      "static-build",
+      timestamp,
+      "_expo",
+      "static",
+      "js",
+      platform,
+      "bundle.js",
+    );
+    let bundle = fs.readFileSync(bundlePath, "utf-8");
+
+    bundle = bundle.replace(
+      /httpServerLocation:"(\/[^"]+)"/g,
+      (_match, capturedPath) => {
+        const tempUrl = new URL(`http://localhost:8081${capturedPath}`);
+        const unstablePath = tempUrl.searchParams.get("unstable_path");
+
+        if (!unstablePath) {
+          throw new Error(
+            `Asset missing unstable_path in bundle: ${capturedPath}`,
+          );
+        }
+
+        const decodedPath = decodeURIComponent(unstablePath);
+        return `httpServerLocation:"${baseUrl}${basePath}/${timestamp}/_expo/static/js/${decodedPath}"`;
+      },
+    );
+
+    fs.writeFileSync(bundlePath, bundle);
+  };
+
+  updateForPlatform("ios");
+  updateForPlatform("android");
+  console.log("Updated bundle URLs");
+}
+
+function updateManifests(manifests, timestamp, baseUrl, assetsByHash) {
+  const updateForPlatform = (platform, manifest) => {
+    if (!manifest.launchAsset || !manifest.extra) {
+      exitWithError(`Malformed manifest for ${platform}`);
+    }
+
+    manifest.launchAsset.url = `${baseUrl}${basePath}/${timestamp}/_expo/static/js/${platform}/bundle.js`;
+    manifest.launchAsset.key = `bundle-${timestamp}`;
+    manifest.createdAt = new Date(
+      Number(timestamp.split("-")[0]),
+    ).toISOString();
+    manifest.extra.expoClient.hostUri =
+      baseUrl.replace("https://", "") + "/" + platform;
+    manifest.extra.expoGo.debuggerHost =
+      baseUrl.replace("https://", "") + "/" + platform;
+    manifest.extra.expoGo.packagerOpts.dev = false;
+
+    if (manifest.assets && manifest.assets.length > 0) {
+      manifest.assets.forEach((asset) => {
+        if (!asset.url) return;
+
+        const hash = asset.hash;
+        if (!hash) return;
+
+        const assetInfo = assetsByHash.get(hash);
+        if (!assetInfo) return;
+
+        asset.url = `${baseUrl}${basePath}/${timestamp}/_expo/static/js/${assetInfo.relativePath}/${assetInfo.filename}`;
+      });
+    }
+
+    fs.writeFileSync(
+      path.join(projectRoot, "static-build", platform, "manifest.json"),
+      JSON.stringify(manifest, null, 2),
+    );
+  };
+
+  updateForPlatform("ios", manifests.ios);
+  updateForPlatform("android", manifests.android);
+  console.log("Manifests updated");
+}
+
+async function main() {
+  console.log("Building static Expo Go deployment...");
+
+  setupSignalHandlers();
+
+  const domain = getDeploymentDomain();
+  const expoPublicReplId = getExpoPublicReplId();
+  const baseUrl = `https://${domain}`;
+  const timestamp = `${Date.now()}-${process.pid}`;
+
+  prepareDirectories(timestamp);
+  clearMetroCache();
+
+  await startMetro(domain, expoPublicReplId);
+
+  const downloadTimeout = 600000;
+  const downloadPromise = downloadBundlesAndManifests(timestamp);
+  const timeoutPromise = new Promise((_, reject) => {
+    setTimeout(() => {
+      reject(
+        new Error(
+          `Overall download timeout after ${downloadTimeout / 1000} seconds. ` +
+            "Metro may be struggling to generate bundles. Check Metro logs above.",
+        ),
+      );
+    }, downloadTimeout);
+  });
+
+  const manifests = await Promise.race([downloadPromise, timeoutPromise]);
+
+  console.log("Processing assets...");
+  const assets = extractAssets(timestamp);
+  console.log("Found", assets.length, "unique asset(s)");
+
+  const assetsByHash = new Map();
+  for (const asset of assets) {
+    assetsByHash.set(asset.hash, {
+      relativePath: asset.relativePath,
+      filename: asset.filename,
+    });
+  }
+
+  const assetCount = await downloadAssets(assets, timestamp);
+
+  if (assetCount > 0) {
+    updateBundleUrls(timestamp, baseUrl);
+  }
+
+  console.log("Updating manifests and creating landing page...");
+  updateManifests(manifests, timestamp, baseUrl, assetsByHash);
+
+  console.log("Build complete! Deploy to:", baseUrl);
+
+  if (metroProcess) {
+    metroProcess.kill();
+  }
+  process.exit(0);
+}
+
+main().catch((error) => {
+  console.error("Build failed:", error.message);
+  if (metroProcess) {
+    metroProcess.kill();
+  }
+  process.exit(1);
+});
+/**
+ * Standalone production server for Expo static builds.
+ *
+ * Serves the output of build.js (static-build/) with two special routes:
+ * - GET / or /manifest with expo-platform header → platform manifest JSON
+ * - GET / without expo-platform → landing page HTML
+ * Everything else falls through to static file serving from ./static-build/.
+ *
+ * Zero external dependencies — uses only Node.js built-ins (http, fs, path).
+ */
+
+const http = require("http");
+const fs = require("fs");
+const path = require("path");
+
+const STATIC_ROOT = path.resolve(__dirname, "..", "static-build");
+const TEMPLATE_PATH = path.resolve(__dirname, "templates", "landing-page.html");
+const basePath = (process.env.BASE_PATH || "/").replace(/\/+$/, "");
+
+const MIME_TYPES = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".otf": "font/otf",
+  ".map": "application/json",
+};
+
+function getAppName() {
+  try {
+    const appJsonPath = path.resolve(__dirname, "..", "app.json");
+    const appJson = JSON.parse(fs.readFileSync(appJsonPath, "utf-8"));
+    return appJson.expo?.name || "App Landing Page";
+  } catch {
+    return "App Landing Page";
+  }
+}
+
+function serveManifest(platform, res) {
+  const manifestPath = path.join(STATIC_ROOT, platform, "manifest.json");
+
+  if (!fs.existsSync(manifestPath)) {
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({ error: `Manifest not found for platform: ${platform}` }),
+    );
+    return;
+  }
+
+  const manifest = fs.readFileSync(manifestPath, "utf-8");
+  res.writeHead(200, {
+    "content-type": "application/json",
+    "expo-protocol-version": "1",
+    "expo-sfv-version": "0",
+  });
+  res.end(manifest);
+}
+
+function serveLandingPage(req, res, landingPageTemplate, appName) {
+  const forwardedProto = req.headers["x-forwarded-proto"];
+  const protocol = forwardedProto || "https";
+  const host = req.headers["x-forwarded-host"] || req.headers["host"];
+  const baseUrl = `${protocol}://${host}`;
+  const expsUrl = `${host}`;
+
+  const html = landingPageTemplate
+    .replace(/BASE_URL_PLACEHOLDER/g, baseUrl)
+    .replace(/EXPS_URL_PLACEHOLDER/g, expsUrl)
+    .replace(/APP_NAME_PLACEHOLDER/g, appName);
+
+  res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+  res.end(html);
+}
+
+function serveStaticFile(urlPath, res) {
+  const safePath = path.normalize(urlPath).replace(/^(\.\.(\/|\\|$))+/, "");
+  const filePath = path.join(STATIC_ROOT, safePath);
+
+  if (!filePath.startsWith(STATIC_ROOT)) {
+    res.writeHead(403);
+    res.end("Forbidden");
+    return;
+  }
+
+  if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+    res.writeHead(404);
+    res.end("Not Found");
+    return;
+  }
+
+  const ext = path.extname(filePath).toLowerCase();
+  const contentType = MIME_TYPES[ext] || "application/octet-stream";
+  const content = fs.readFileSync(filePath);
+  res.writeHead(200, { "content-type": contentType });
+  res.end(content);
+}
+
+const landingPageTemplate = fs.readFileSync(TEMPLATE_PATH, "utf-8");
+const appName = getAppName();
+
+const server = http.createServer((req, res) => {
+  const url = new URL(req.url || "/", `http://${req.headers.host}`);
+  let pathname = url.pathname;
+
+  if (basePath && pathname.startsWith(basePath)) {
+    pathname = pathname.slice(basePath.length) || "/";
+  }
+
+  if (pathname === "/" || pathname === "/manifest") {
+    const platform = req.headers["expo-platform"];
+    if (platform === "ios" || platform === "android") {
+      return serveManifest(platform, res);
+    }
+
+    if (pathname === "/") {
+      return serveLandingPage(req, res, landingPageTemplate, appName);
+    }
+  }
+
+  serveStaticFile(pathname, res);
+});
+
+const port = parseInt(process.env.PORT || "3000", 10);
+server.listen(port, "0.0.0.0", () => {
+  console.log(`Serving static Expo build on port ${port}`);
+});
+export type TransactionType = "credit" | "debit";
+export type TransactionSource = "mpesa" | "equity" | "other" | "manual";
+export type Category =
+  | "food_dining"
+  | "transport"
+  | "utilities"
+  | "shopping"
+  | "health"
+  | "entertainment"
+  | "savings"
+  | "transfer"
+  | "education"
+  | "cash_withdrawal"
+  | "other";
+
+export interface Transaction {
+  id: string;
+  date: Date;
+  amount: number;
+  type: TransactionType;
+  description: string;
+  category: Category;
+  source: TransactionSource;
+  rawText: string;
+  balance?: number;
+  reference?: string;
+}
+
+export interface CategorySummary {
+  category: Category;
+  total: number;
+  count: number;
+  percentage: number;
+}
+
+export interface MonthSummary {
+  month: string;
+  income: number;
+  expenses: number;
+  net: number;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  timestamp: Date;
+}
+import { Category, TransactionType } from "@/types/finance";
+
+interface CategoryMeta {
+  label: string;
+  icon: string;
+  color: string;
+  keywords: string[];
+}
+
+export const CATEGORY_META: Record<Category, CategoryMeta> = {
+  food_dining: {
+    label: "Food & Dining",
+    icon: "coffee",
+    color: "#F59E0B",
+    keywords: [
+      "java", "kfc", "pizza", "food", "restaurant", "cafe", "hotel",
+      "quickmart", "naivas", "carrefour", "eat", "lunch", "dinner",
+      "breakfast", "chicken", "burger", "kitchen", "bakery", "supermarket",
+      "grocery", "cleanshelf", "market", "jumia food", "glovo",
+    ],
+  },
+  transport: {
+    label: "Transport",
+    icon: "navigation",
+    color: "#3B82F6",
+    keywords: [
+      "uber", "bolt", "little", "matatu", "stage", "bus", "fuel",
+      "petrol", "fare", "parking", "ntsa", "safeboda", "taxi",
+      "vehicle", "transport", "travel", "ride",
+    ],
+  },
+  utilities: {
+    label: "Utilities",
+    icon: "zap",
+    color: "#8B5CF6",
+    keywords: [
+      "kplc", "kenya power", "water", "safaricom", "airtel", "faiba",
+      "telkom", "data", "airtime", "electricity", "wifi", "internet",
+      "stima", "nairobi water", "wwda",
+    ],
+  },
+  shopping: {
+    label: "Shopping",
+    icon: "shopping-bag",
+    color: "#EC4899",
+    keywords: [
+      "game", "jumia", "kilimall", "amazon", "clothes", "clothing",
+      "fashion", "shoes", "shirt", "trouser", "dress", "mall",
+      "nakumatt", "tuskys", "shop", "store", "buy", "purchase",
+    ],
+  },
+  health: {
+    label: "Health",
+    icon: "heart",
+    color: "#EF4444",
+    keywords: [
+      "pharmacy", "dawa", "hospital", "clinic", "doctor", "medicine",
+      "chemist", "health", "medical", "nhif", "insurance", "dental",
+      "lab", "test", "prescription",
+    ],
+  },
+  entertainment: {
+    label: "Entertainment",
+    icon: "music",
+    color: "#F97316",
+    keywords: [
+      "movie", "cinema", "netflix", "spotify", "dstv", "showmax",
+      "club", "bar", "pub", "lounge", "concert", "event", "ticket",
+      "game", "sport", "gym", "fitness",
+    ],
+  },
+  savings: {
+    label: "Savings",
+    icon: "trending-up",
+    color: "#10B981",
+    keywords: [
+      "save", "savings", "sacco", "investment", "mshwari", "kcbmpesa",
+      "kcb mpesa", "mali", "pesa link", "deposit", "fixed", "money market",
+    ],
+  },
+  transfer: {
+    label: "Transfer",
+    icon: "repeat",
+    color: "#06B6D4",
+    keywords: [
+      "sent to", "paid to", "received from", "transfer", "bank",
+      "equity", "kcb", "coop", "absa", "standard chartered",
+      "family bank", "ncba", "i&m",
+    ],
+  },
+  education: {
+    label: "Education",
+    icon: "book",
+    color: "#6366F1",
+    keywords: [
+      "school", "university", "college", "tuition", "fees", "exam",
+      "knec", "kcse", "library", "education", "study", "course",
+    ],
+  },
+  cash_withdrawal: {
+    label: "Cash Withdrawal",
+    icon: "dollar-sign",
+    color: "#64748B",
+    keywords: [
+      "withdrawal", "atm", "agent", "withdraw", "cash out",
+    ],
+  },
+  other: {
+    label: "Other",
+    icon: "more-horizontal",
+    color: "#94A3B8",
+    keywords: [],
+  },
+};
+
+export function categorize(description: string, type: TransactionType): Category {
+  if (type === "credit") {
+    const lower = description.toLowerCase();
+    if (CATEGORY_META.savings.keywords.some((k) => lower.includes(k))) return "savings";
+    if (CATEGORY_META.transfer.keywords.some((k) => lower.includes(k))) return "transfer";
+    return "transfer";
+  }
+
+  const lower = description.toLowerCase();
+
+  const order: Category[] = [
+    "utilities",
+    "health",
+    "education",
+    "savings",
+    "food_dining",
+    "transport",
+    "entertainment",
+    "shopping",
+    "cash_withdrawal",
+    "transfer",
+  ];
+
+  for (const cat of order) {
+    if (CATEGORY_META[cat].keywords.some((k) => lower.includes(k))) {
+      return cat;
+    }
+  }
+
+  return "other";
+}
+import { PermissionsAndroid, Platform } from "react-native";
+
+export interface RawSms {
+  _id: string;
+  address: string;
+  body: string;
+  date: number;
+  date_sent: number;
+  read: string;
+  type: string;
+  thread_id: string;
+}
+
+export interface SmsReadResult {
+  messages: RawSms[];
+  total: number;
+  financeCount: number;
+  permissionDenied?: boolean;
+  unavailable?: boolean;
+}
+
+const FINANCE_SENDERS = [
+  "MPESA",
+  "M-PESA",
+  "SAFARICOM",
+  "22141",
+  "EQUITY",
+  "EQBNK",
+  "EQUITEL",
+  "KCB",
+  "KCBMPESA",
+  "COOP",
+  "COOPERATIVE",
+  "NCBA",
+  "ABSA",
+  "STANBIC",
+  "FAMILY",
+  "DTB",
+  "SIDIAN",
+  "PRIME",
+  "GUARDIAN",
+  "I&M",
+  "POSTBANK",
+  "FULIZA",
+  "MSHWARI",
+];
+
+export async function requestSmsPermission(): Promise<boolean> {
+  if (Platform.OS !== "android") return false;
+  try {
+    const granted = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.READ_SMS,
+      {
+        title: "SMS Read Permission",
+        message:
+          "Pesa Tracker needs to read your SMS inbox to automatically import M-Pesa and bank transactions. Your messages are processed on your device and never uploaded.",
+        buttonPositive: "Allow",
+        buttonNegative: "Not Now",
+        buttonNeutral: "Ask Me Later",
+      }
+    );
+    return granted === PermissionsAndroid.RESULTS.GRANTED;
+  } catch {
+    return false;
+  }
+}
+
+export async function checkSmsPermission(): Promise<boolean> {
+  if (Platform.OS !== "android") return false;
+  try {
+    return await PermissionsAndroid.check(
+      PermissionsAndroid.PERMISSIONS.READ_SMS
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isFinanceSms(address: string): boolean {
+  const upper = address.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return FINANCE_SENDERS.some((s) => upper.includes(s.replace(/[^A-Z0-9]/g, "")));
+}
+
+export async function readFinanceSms(
+  maxCount = 3000,
+  onProgress?: (loaded: number, total: number) => void
+): Promise<SmsReadResult> {
+  if (Platform.OS !== "android") {
+    return { messages: [], total: 0, financeCount: 0, unavailable: true };
+  }
+
+  const hasPermission = await checkSmsPermission();
+  if (!hasPermission) {
+    const granted = await requestSmsPermission();
+    if (!granted) {
+      return { messages: [], total: 0, financeCount: 0, permissionDenied: true };
+    }
+  }
+
+  // Dynamically require to avoid crashing on unsupported platforms / Expo Go
+  let SmsAndroid: {
+    list: (
+      filter: string,
+      onFail: (err: string) => void,
+      onSuccess: (count: number, smsList: string) => void
+    ) => void;
+  };
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    SmsAndroid = (require("react-native-get-sms-android") as { default: typeof SmsAndroid }).default;
+  } catch {
+    return { messages: [], total: 0, financeCount: 0, unavailable: true };
+  }
+
+  return new Promise((resolve) => {
+    SmsAndroid.list(
+      JSON.stringify({
+        box: "inbox",
+        maxCount,
+        indexFrom: 0,
+      }),
+      (fail) => {
+        console.warn("SMS list failed:", fail);
+        resolve({ messages: [], total: 0, financeCount: 0 });
+      },
+      (_count, smsList) => {
+        try {
+          const all: RawSms[] = JSON.parse(smsList);
+          const finance = all.filter((sms) => isFinanceSms(sms.address ?? ""));
+          onProgress?.(all.length, all.length);
+          resolve({
+            messages: finance,
+            total: all.length,
+            financeCount: finance.length,
+          });
+        } catch {
+          resolve({ messages: [], total: 0, financeCount: 0 });
+        }
+      }
+    );
+  });
+}
+
+export function smsToRawText(messages: RawSms[]): string {
+  return messages
+    .sort((a, b) => b.date - a.date)
+    .map((m) => m.body)
+    .filter(Boolean)
+    .join("\n\n");
+}
+import { Transaction, TransactionSource, TransactionType } from "@/types/finance";
+import { categorize } from "./categories";
+
+function generateId(): string {
+  return Date.now().toString() + Math.random().toString(36).substring(2, 9);
+}
+
+function parseAmount(raw: string): number {
+  return parseFloat(raw.replace(/,/g, ""));
+}
+
+function parseDate(raw: string): Date {
+  const d = new Date(raw);
+  if (!isNaN(d.getTime())) return d;
+  return new Date();
+}
+
+export interface ParseResult {
+  transactions: Transaction[];
+  unparsed: number;
+}
+
+export function parseSmsMessages(rawText: string): ParseResult {
+  const lines = rawText
+    .split(/\n{2,}|\r\n\r\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  const transactions: Transaction[] = [];
+  let unparsed = 0;
+
+  for (const line of lines) {
+    const tx = parseSingleSms(line);
+    if (tx) {
+      transactions.push(tx);
+    } else {
+      unparsed++;
+    }
+  }
+
+  return { transactions, unparsed };
+}
+
+function parseSingleSms(text: string): Transaction | null {
+  const upper = text.toUpperCase();
+
+  if (upper.includes("M-PESA") || upper.includes("MPESA") || /[A-Z]{2,4}\d{6,10}/.test(text)) {
+    return parseMpesa(text);
+  }
+
+  if (upper.includes("EQUITY") || upper.includes("EQUITEL")) {
+    return parseEquity(text);
+  }
+
+  if (upper.includes("KCB") || upper.includes("KCBMPESA")) {
+    return parseKcb(text);
+  }
+
+  if (upper.includes("COOPERATIVE") || upper.includes("CO-OP")) {
+    return parseCoop(text);
+  }
+
+  return null;
+}
+
+function parseMpesa(text: string): Transaction | null {
+  const confirmRef = text.match(/^([A-Z0-9]{8,12})\s+Confirmed/i)?.[1] ?? "";
+
+  const dateMatch = text.match(
+    /on\s+(\d{1,2}\/\d{1,2}\/\d{2,4})\s+at\s+(\d{1,2}:\d{2}\s*[AP]M)/i
+  );
+  const date = dateMatch ? parseDate(`${dateMatch[1]} ${dateMatch[2]}`) : new Date();
+
+  const balanceMatch = text.match(/balance[^\d]*([\d,]+\.?\d*)/i);
+  const balance = balanceMatch ? parseAmount(balanceMatch[1]) : undefined;
+
+  const receivedMatch = text.match(
+    /received\s+Ksh\s*([\d,]+\.?\d*)\s+from\s+(.+?)\s+\d{10}/i
+  );
+  if (receivedMatch) {
+    const amount = parseAmount(receivedMatch[1]);
+    const description = `Received from ${receivedMatch[2].trim()}`;
+    return {
+      id: generateId(),
+      date,
+      amount,
+      type: "credit",
+      description,
+      category: categorize(description, "credit"),
+      source: "mpesa",
+      rawText: text,
+      balance,
+      reference: confirmRef,
+    };
+  }
+
+  const sentMatch = text.match(
+    /Ksh\s*([\d,]+\.?\d*)\s+sent\s+to\s+(.+?)\s+\d{10}/i
+  );
+  if (sentMatch) {
+    const amount = parseAmount(sentMatch[1]);
+    const description = `Sent to ${sentMatch[2].trim()}`;
+    return {
+      id: generateId(),
+      date,
+      amount,
+      type: "debit",
+      description,
+      category: categorize(description, "debit"),
+      source: "mpesa",
+      rawText: text,
+      balance,
+      reference: confirmRef,
+    };
+  }
+
+  const paidMatch = text.match(/Ksh\s*([\d,]+\.?\d*)\s+paid\s+to\s+(.+?)\./i);
+  if (paidMatch) {
+    const amount = parseAmount(paidMatch[1]);
+    const description = `Paid to ${paidMatch[2].trim()}`;
+    return {
+      id: generateId(),
+      date,
+      amount,
+      type: "debit",
+      description,
+      category: categorize(description, "debit"),
+      source: "mpesa",
+      rawText: text,
+      balance,
+      reference: confirmRef,
+    };
+  }
+
+  const withdrawalMatch = text.match(
+    /Ksh\s*([\d,]+\.?\d*)\s+withdrawn\s+from\s+(?:agent\s+)?(.+?)\s+\d{10}/i
+  );
+  if (withdrawalMatch) {
+    const amount = parseAmount(withdrawalMatch[1]);
+    const description = `Withdrawal from agent ${withdrawalMatch[2].trim()}`;
+    return {
+      id: generateId(),
+      date,
+      amount,
+      type: "debit",
+      description,
+      category: "cash_withdrawal",
+      source: "mpesa",
+      rawText: text,
+      balance,
+      reference: confirmRef,
+    };
+  }
+
+  const airtimeMatch = text.match(/bought\s+Ksh\s*([\d,]+\.?\d*).+?airtime/i);
+  if (airtimeMatch) {
+    const amount = parseAmount(airtimeMatch[1]);
+    return {
+      id: generateId(),
+      date,
+      amount,
+      type: "debit",
+      description: "Airtime purchase",
+      category: "utilities",
+      source: "mpesa",
+      rawText: text,
+      balance,
+      reference: confirmRef,
+    };
+  }
+
+  const fulizaMatch = text.match(
+    /(?:borrowed|loan\s+of)\s+Ksh\s*([\d,]+\.?\d*)/i
+  );
+  if (fulizaMatch) {
+    const amount = parseAmount(fulizaMatch[1]);
+    return {
+      id: generateId(),
+      date,
+      amount,
+      type: "credit",
+      description: "Fuliza / M-Pesa Loan",
+      category: "savings",
+      source: "mpesa",
+      rawText: text,
+      balance,
+      reference: confirmRef,
+    };
+  }
+
+  const depositMatch = text.match(
+    /(?:deposited|deposit\s+of)\s+Ksh\s*([\d,]+\.?\d*)/i
+  );
+  if (depositMatch) {
+    const amount = parseAmount(depositMatch[1]);
+    return {
+      id: generateId(),
+      date,
+      amount,
+      type: "credit",
+      description: "M-Pesa deposit",
+      category: "transfer",
+      source: "mpesa",
+      rawText: text,
+      balance,
+      reference: confirmRef,
+    };
+  }
+
+  return null;
+}
+
+function parseEquity(text: string): Transaction | null {
+  const debitMatch = text.match(
+    /(?:debited|debit)\s+(?:KES|Ksh)\s*([\d,]+\.?\d*)/i
+  );
+  const creditMatch = text.match(
+    /(?:credited|credit)\s+(?:KES|Ksh)\s*([\d,]+\.?\d*)/i
+  );
+  const balanceMatch = text.match(
+    /(?:available|balance)\s+(?:KES|Ksh)\s*([\d,]+\.?\d*)/i
+  );
+  const dateMatch = text.match(/(?:date:|on\s+)(\d{1,2}[-\/]\w+[-\/]\d{2,4})/i);
+
+  const balance = balanceMatch ? parseAmount(balanceMatch[1]) : undefined;
+  const date = dateMatch ? parseDate(dateMatch[1]) : new Date();
+
+  if (debitMatch) {
+    const amount = parseAmount(debitMatch[1]);
+    const description = extractEquityDescription(text) || "Equity Bank debit";
+    return {
+      id: generateId(),
+      date,
+      amount,
+      type: "debit",
+      description,
+      category: categorize(description, "debit"),
+      source: "equity",
+      rawText: text,
+      balance,
+    };
+  }
+
+  if (creditMatch) {
+    const amount = parseAmount(creditMatch[1]);
+    const description = extractEquityDescription(text) || "Equity Bank credit";
+    return {
+      id: generateId(),
+      date,
+      amount,
+      type: "credit",
+      description,
+      category: categorize(description, "credit"),
+      source: "equity",
+      rawText: text,
+      balance,
+    };
+  }
+
+  return null;
+}
+
+function extractEquityDescription(text: string): string | null {
+  const match = text.match(/(?:for|to|from|via)\s+([A-Za-z\s&'.-]{3,40})/i);
+  return match ? match[1].trim() : null;
+}
+
+function parseKcb(text: string): Transaction | null {
+  const debitMatch = text.match(/debited\s+(?:KES|Ksh)\s*([\d,]+\.?\d*)/i);
+  const creditMatch = text.match(/credited\s+(?:KES|Ksh)\s*([\d,]+\.?\d*)/i);
+  const balanceMatch = text.match(/balance\s+(?:KES|Ksh)\s*([\d,]+\.?\d*)/i);
+  const balance = balanceMatch ? parseAmount(balanceMatch[1]) : undefined;
+
+  if (debitMatch) {
+    return {
+      id: generateId(),
+      date: new Date(),
+      amount: parseAmount(debitMatch[1]),
+      type: "debit",
+      description: "KCB Bank debit",
+      category: "transfer",
+      source: "other",
+      rawText: text,
+      balance,
+    };
+  }
+
+  if (creditMatch) {
+    return {
+      id: generateId(),
+      date: new Date(),
+      amount: parseAmount(creditMatch[1]),
+      type: "credit",
+      description: "KCB Bank credit",
+      category: "transfer",
+      source: "other",
+      rawText: text,
+      balance,
+    };
+  }
+
+  return null;
+}
+
+function parseCoop(text: string): Transaction | null {
+  const debitMatch = text.match(/debited\s+(?:KES|Ksh)\s*([\d,]+\.?\d*)/i);
+  const creditMatch = text.match(/credited\s+(?:KES|Ksh)\s*([\d,]+\.?\d*)/i);
+  const balance = undefined;
+
+  if (debitMatch) {
+    return {
+      id: generateId(),
+      date: new Date(),
+      amount: parseAmount(debitMatch[1]),
+      type: "debit",
+      description: "Co-op Bank debit",
+      category: "transfer",
+      source: "other",
+      rawText: text,
+      balance,
+    };
+  }
+
+  if (creditMatch) {
+    return {
+      id: generateId(),
+      date: new Date(),
+      amount: parseAmount(creditMatch[1]),
+      type: "credit",
+      description: "Co-op Bank credit",
+      category: "transfer",
+      source: "other",
+      rawText: text,
+      balance,
+    };
+  }
+
+  return null;
+}
+import * as FileSystem from "expo-file-system";
+import * as MediaLibrary from "expo-media-library";
+import { Platform } from "react-native";
+
+export type MediaType =
+  | "images"
+  | "videos"
+  | "audio"
+  | "documents"
+  | "voice_notes"
+  | "gifs"
+  | "stickers";
+
+export interface MediaFile {
+  uri: string;
+  name: string;
+  size: number;
+  modificationTime: number;
+  mediaType: MediaType;
+  mimeType?: string;
+}
+
+export interface MediaCategory {
+  type: MediaType;
+  label: string;
+  icon: string;
+  color: string;
+  folderNames: string[];
+}
+
+export const MEDIA_CATEGORIES: MediaCategory[] = [
+  {
+    type: "images",
+    label: "Images",
+    icon: "image",
+    color: "#3B82F6",
+    folderNames: ["WhatsApp Images"],
+  },
+  {
+    type: "videos",
+    label: "Videos",
+    icon: "video",
+    color: "#8B5CF6",
+    folderNames: ["WhatsApp Video"],
+  },
+  {
+    type: "audio",
+    label: "Audio",
+    icon: "music",
+    color: "#F59E0B",
+    folderNames: ["WhatsApp Audio"],
+  },
+  {
+    type: "voice_notes",
+    label: "Voice Notes",
+    icon: "mic",
+    color: "#10B981",
+    folderNames: ["WhatsApp Voice Notes"],
+  },
+  {
+    type: "documents",
+    label: "Documents",
+    icon: "file-text",
+    color: "#EF4444",
+    folderNames: ["WhatsApp Documents"],
+  },
+  {
+    type: "gifs",
+    label: "GIFs",
+    icon: "film",
+    color: "#EC4899",
+    folderNames: ["WhatsApp Animated Gifs"],
+  },
+  {
+    type: "stickers",
+    label: "Stickers",
+    icon: "smile",
+    color: "#F97316",
+    folderNames: ["WhatsApp Stickers"],
+  },
+];
+
+// WhatsApp media root directories (ordered by preference)
+const WA_ROOTS = [
+  "/storage/emulated/0/Android/media/com.whatsapp/WhatsApp/Media",
+  "/storage/emulated/0/WhatsApp/Media",
+];
+
+export async function requestPermissions(): Promise<boolean> {
+  if (Platform.OS !== "android") return false;
+  const { status } = await MediaLibrary.requestPermissionsAsync(true);
+  return status === "granted";
+}
+
+export async function findWhatsAppRoot(): Promise<string | null> {
+  if (Platform.OS !== "android") return null;
+  for (const root of WA_ROOTS) {
+    try {
+      const info = await FileSystem.getInfoAsync(root);
+      if (info.exists && info.isDirectory) return root;
+    } catch {
+      // try next
+    }
+  }
+  return null;
+}
+
+async function scanDirectory(dirUri: string, mediaType: MediaType): Promise<MediaFile[]> {
+  const files: MediaFile[] = [];
+  try {
+    const entries = await FileSystem.readDirectoryAsync(dirUri);
+    for (const name of entries) {
+      if (name.startsWith(".")) continue;
+      const uri = `${dirUri}/${name}`;
+      try {
+        const info = await FileSystem.getInfoAsync(uri, { size: true });
+        if (info.exists && !info.isDirectory) {
+          files.push({
+            uri,
+            name,
+            size: (info as FileSystem.FileInfo & { size: number }).size ?? 0,
+            modificationTime: (info as FileSystem.FileInfo & { modificationTime: number }).modificationTime ?? Date.now() / 1000,
+            mediaType,
+          });
+        } else if (info.exists && info.isDirectory && name === ".Sent") {
+          const sent = await scanDirectory(uri, mediaType);
+          files.push(...sent);
+        }
+      } catch {
+        // skip unreadable files
+      }
+    }
+  } catch {
+    // directory not accessible
+  }
+  return files;
+}
+
+export interface ScanResult {
+  categories: Record<MediaType, MediaFile[]>;
+  totalSize: number;
+  totalCount: number;
+  root: string | null;
+}
+
+export async function scanWhatsAppMedia(): Promise<ScanResult> {
+  const result: ScanResult = {
+    categories: {
+      images: [],
+      videos: [],
+      audio: [],
+      voice_notes: [],
+      documents: [],
+      gifs: [],
+      stickers: [],
+    },
+    totalSize: 0,
+    totalCount: 0,
+    root: null,
+  };
+
+  const root = await findWhatsAppRoot();
+  result.root = root;
+  if (!root) return result;
+
+  for (const cat of MEDIA_CATEGORIES) {
+    for (const folderName of cat.folderNames) {
+      const dirUri = `${root}/${folderName}`;
+      const files = await scanDirectory(dirUri, cat.type);
+      result.categories[cat.type].push(...files);
+    }
+  }
+
+  for (const files of Object.values(result.categories)) {
+    for (const f of files) {
+      result.totalSize += f.size;
+      result.totalCount++;
+    }
+  }
+
+  return result;
+}
+
+export async function deleteFiles(uris: string[]): Promise<{ deleted: number; failed: number }> {
+  let deleted = 0;
+  let failed = 0;
+  for (const uri of uris) {
+    try {
+      await FileSystem.deleteAsync(uri, { idempotent: true });
+      deleted++;
+    } catch {
+      failed++;
+    }
+  }
+  return { deleted, failed };
+}
+
+export function formatBytes(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+export function formatCount(n: number): string {
+  return n.toLocaleString();
+}
+{
+  "expo": {
+    "name": "Pesa Tracker",
+    "slug": "finance-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "finance-app",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/images/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#00897B"
+    },
+    "ios": {
+      "supportsTablet": false
+    },
+    "android": {
+      "permissions": [
+        "android.permission.READ_SMS",
+        "android.permission.RECEIVE_SMS",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.MANAGE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/images/icon.png"
+    },
+    "plugins": [
+      [
+        "expo-router",
+        {
+          "origin": "https://replit.com/"
+        }
+      ],
+      "expo-font",
+      "expo-web-browser"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}
