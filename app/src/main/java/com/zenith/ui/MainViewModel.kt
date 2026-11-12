@@ -74,10 +74,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun reclassifyTransaction(transactionId: String, description: String, newCategory: String, rememberForFuture: Boolean = true) {
         viewModelScope.launch(Dispatchers.IO) {
+            // 1. Update this specific transaction
             db.transactionDao().updateTransactionCategory(transactionId, newCategory)
             if (rememberForFuture) {
+                // 2. Remember category for this description going forward
                 db.providerCategoryDao().insertProviderCategory(ProviderCategory(description, newCategory))
+                // 3. Update ALL existing transactions with the same description
                 db.transactionDao().updateCategoryByDescription(description, newCategory)
+                // 4. KEY FIX: resolve ALL other pending-review items with same description in one shot
+                //    so the same merchant/person never re-appears in the clarification queue
+                db.transactionDao().resolveAllByDescription(description, newCategory)
             }
         }
     }

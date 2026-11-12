@@ -19,6 +19,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.zenith.data.local.TransactionEntity
+import com.zenith.domain.NameMatcher
 import com.zenith.ui.MainViewModel
 import java.text.SimpleDateFormat
 import java.util.*
@@ -48,31 +49,33 @@ fun PartyLedgerScreen(
     val dismissedParties = remember { mutableStateListOf<String>() }
     val flippedParties   = remember { mutableStateListOf<String>() }
 
-    // Build one PartyEntry per person (names normalized to Title Case for deduplication)
+    // Build one PartyEntry per person — fuzzy name deduplication via NameMatcher (no AI)
     val partyLedgers: List<PartyEntry> = remember(transactions) {
-        val map = mutableMapOf<String, MutableList<TransactionEntity>>()
+        // Step 1: collect all raw name → transactions pairs
+        val rawMap = mutableMapOf<String, MutableList<TransactionEntity>>()
         for (tx in transactions) {
             val rawName: String? = tx.partyName?.takeIf { it.isNotBlank() }
                 ?: run {
                     val desc = tx.description
                     when {
-                        desc.startsWith("Sent to ", ignoreCase = true)      -> desc.removePrefix("Sent to ").trim()
-                        desc.startsWith("Received from ", ignoreCase = true) -> desc.removePrefix("Received from ").trim()
-                        desc.startsWith("Paid to ", ignoreCase = true)       -> desc.removePrefix("Paid to ").trim()
+                        desc.startsWith("Sent to ", ignoreCase = true)       -> desc.removePrefix("Sent to ").trim()
+                        desc.startsWith("Received from ", ignoreCase = true)  -> desc.removePrefix("Received from ").trim()
+                        desc.startsWith("Paid to ", ignoreCase = true)        -> desc.removePrefix("Paid to ").trim()
                         else -> null
                     }
                 }
             if (rawName != null) {
-                val key = rawName.trim().lowercase()
-                    .split(" ")
-                    .joinToString(" ") { w -> w.replaceFirstChar { it.uppercase() } }
-                map.getOrPut(key) { mutableListOf() }.add(tx)
+                rawMap.getOrPut(rawName.trim()) { mutableListOf() }.add(tx)
             }
         }
-        map.map { (name, list) ->
-            val sent     = list.filter { it.type == "DEBIT"  }.sumOf { it.amount }
-            val received = list.filter { it.type == "CREDIT" }.sumOf { it.amount }
-            PartyEntry(name = name, sent = sent, received = received, net = sent - received)
+        // Step 2: cluster raw names into canonical names using fuzzy matching
+        val clusters = NameMatcher.groupByCanonicalName(rawMap.keys.toList())
+        // Step 3: merge transactions under each canonical name, compute net
+        clusters.map { (canonical, variants) ->
+            val allTx = variants.flatMap { rawMap[it] ?: emptyList() }
+            val sent     = allTx.filter { it.type == "DEBIT"  }.sumOf { it.amount }
+            val received = allTx.filter { it.type == "CREDIT" }.sumOf { it.amount }
+            PartyEntry(name = canonical, sent = sent, received = received, net = sent - received)
         }.sortedByDescending { abs(it.net) }
     }
 

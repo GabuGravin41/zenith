@@ -37,6 +37,10 @@ interface TransactionDao {
     @Query("UPDATE transactions SET category = :category, needsReview = 0 WHERE id = :id")
     suspend fun updateTransactionCategory(id: String, category: String)
 
+    // Batch-resolve ALL pending-review transactions that share the same normalised description
+    @Query("UPDATE transactions SET category = :category, needsReview = 0 WHERE needsReview = 1 AND description = :description")
+    suspend fun resolveAllByDescription(description: String, category: String)
+
     @Query("SELECT * FROM transactions WHERE needsReview = 1 ORDER BY date DESC LIMIT 10")
     fun getTransactionsNeedingReview(): Flow<List<TransactionEntity>>
 
