@@ -29,8 +29,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import coil.decode.VideoFrameDecoder
 import com.zenith.domain.MediaScanner
 import com.zenith.domain.model.MediaFile
 import com.zenith.domain.model.MediaType
@@ -49,6 +53,8 @@ fun MediaDetailScreen(typeLabel: String, viewModel: MainViewModel) {
     var selectedFolder by remember { mutableStateOf("All") }
     var selectedFiles by remember { mutableStateOf(setOf<String>()) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var previewFile by remember { mutableStateOf<MediaFile?>(null) }
+
     // List mode for audio/docs, grid mode for images/videos
     val useListMode = mediaType in listOf(MediaType.VOICE_NOTES, MediaType.AUDIO, MediaType.DOCUMENTS)
 
@@ -98,99 +104,98 @@ fun MediaDetailScreen(typeLabel: String, viewModel: MainViewModel) {
         }
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
-            // Folder filter tabs
-            if (folders.size > 1) {
-                ScrollableTabRow(
-                    selectedTabIndex = folders.indexOf(selectedFolder).coerceAtLeast(0),
-                    edgePadding = 16.dp,
-                    containerColor = Color.Transparent,
-                    divider = {}
+
+            // Folder Filter Pills
+            if (folders.size > 2) {
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    folders.forEach { folder ->
+                    items(folders) { folder ->
                         val count = if (folder == "All") files.size else files.count { it.folder == folder }
-                        Tab(
+                        FilterChip(
                             selected = selectedFolder == folder,
-                            onClick = { selectedFolder = folder; selectedFiles = emptySet() },
-                            text = { Text("$folder ($count)") }
+                            onClick = { selectedFolder = folder },
+                            label = { Text("$folder ($count)") },
+                            shape = RoundedCornerShape(20.dp)
                         )
                     }
                 }
+                HorizontalDivider(modifier = Modifier.padding(bottom = 8.dp))
             }
 
             if (filteredFiles.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(
-                            getMediaIcon(mediaType), contentDescription = null,
+                            Icons.Default.FolderOpen,
+                            contentDescription = null,
                             modifier = Modifier.size(64.dp),
-                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
+                            tint = Color.Gray.copy(alpha = 0.5f)
                         )
-                        Spacer(Modifier.height(16.dp))
-                        Text("No $typeLabel found", color = Color.Gray)
-                        Text(
-                            "Tap 'Scan' on the Storage Studio page to find your media",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.Gray.copy(alpha = 0.7f),
-                            modifier = Modifier.padding(horizontal = 32.dp)
-                        )
+                        Spacer(Modifier.height(12.dp))
+                        Text("No $typeLabel found", style = MaterialTheme.typography.bodyLarge, color = Color.Gray)
                     }
                 }
             } else if (useListMode) {
-                // List mode for audio / voice notes / documents
+                // List layout for audio / documents
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    groupedByDate.forEach { (date, dayFiles) ->
-                        item {
-                            Text(
-                                date,
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
-                            )
-                        }
-                        items(dayFiles) { file ->
-                            MediaListRow(
-                                file = file,
-                                isSelected = selectedFiles.contains(file.path),
-                                onSelect = {
-                                    selectedFiles = if (selectedFiles.contains(file.path))
-                                        selectedFiles - file.path else selectedFiles + file.path
-                                }
-                            )
-                        }
+                    items(filteredFiles) { file ->
+                        MediaListRow(
+                            file = file,
+                            isSelected = selectedFiles.contains(file.path),
+                            onSelect = {
+                                selectedFiles = if (selectedFiles.contains(file.path))
+                                    selectedFiles - file.path else selectedFiles + file.path
+                            }
+                        )
                     }
                     item { Spacer(Modifier.height(80.dp)) }
                 }
             } else {
-                // Grid mode for images / videos
+                // Grid layout with dates
                 LazyVerticalGrid(
-                    columns = GridCells.Adaptive(110.dp),
+                    columns = GridCells.Fixed(3),
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    groupedByDate.forEach { (date, dayFiles) ->
+                    groupedByDate.forEach { (date, filesForDate) ->
                         item(span = { GridItemSpan(maxLineSpan) }) {
-                            Text(
-                                date,
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(top = 12.dp, bottom = 4.dp)
-                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    date,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    "${filesForDate.size} items • ${MediaScanner.formatBytes(filesForDate.sumOf { it.size })}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color.Gray
+                                )
+                            }
                         }
-                        items(dayFiles) { file ->
+
+                        items(filesForDate) { file ->
                             MediaThumbnail(
                                 file = file,
                                 isSelected = selectedFiles.contains(file.path),
                                 onSelect = {
                                     selectedFiles = if (selectedFiles.contains(file.path))
                                         selectedFiles - file.path else selectedFiles + file.path
+                                },
+                                onPreview = {
+                                    previewFile = file
                                 }
                             )
                         }
@@ -199,6 +204,18 @@ fun MediaDetailScreen(typeLabel: String, viewModel: MainViewModel) {
                 }
             }
         }
+    }
+
+    // Full-screen Image / Video In-App Lightbox
+    previewFile?.let { file ->
+        MediaLightboxDialog(
+            file = file,
+            onDismiss = { previewFile = null },
+            onDelete = {
+                viewModel.deleteMedia(listOf(file.path))
+                previewFile = null
+            }
+        )
     }
 
     // Delete confirmation dialog
@@ -230,6 +247,139 @@ fun MediaDetailScreen(typeLabel: String, viewModel: MainViewModel) {
     }
 }
 
+// ── In-App Media Lightbox Dialog ─────────────────────────────────────────────
+
+@Composable
+fun MediaLightboxDialog(
+    file: MediaFile,
+    onDismiss: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val context = LocalContext.current
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+        ) {
+            // Media Display
+            if (file.type == MediaType.VIDEOS) {
+                // Video preview with frame extraction + quick launch player
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val request = ImageRequest.Builder(context)
+                        .data(File(file.path))
+                        .decoderFactory(VideoFrameDecoder.Factory())
+                        .build()
+
+                    AsyncImage(
+                        model = request,
+                        contentDescription = "Video preview",
+                        modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+                        contentScale = ContentScale.Fit
+                    )
+
+                    FloatingActionButton(
+                        onClick = {
+                            try {
+                                val f = File(file.path)
+                                val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", f)
+                                val intent = Intent(Intent.ACTION_VIEW).apply {
+                                    setDataAndType(uri, "video/*")
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                context.startActivity(intent)
+                            } catch (e: Exception) { /* ignore */ }
+                        },
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(64.dp)
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = "Play Video", tint = Color.White, modifier = Modifier.size(36.dp))
+                    }
+                }
+            } else {
+                // Image Display
+                AsyncImage(
+                    model = File(file.path),
+                    contentDescription = file.name,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable { onDismiss() },
+                    contentScale = ContentScale.Fit
+                )
+            }
+
+            // Top Bar
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+                    .align(Alignment.TopCenter),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                ) {
+                    Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Open in external app
+                    IconButton(
+                        onClick = {
+                            try {
+                                val f = File(file.path)
+                                val ext = file.name.substringAfterLast(".", "")
+                                val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext.lowercase()) ?: "*/*"
+                                val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", f)
+                                val intent = Intent(Intent.ACTION_VIEW).apply {
+                                    setDataAndType(uri, mime)
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                context.startActivity(Intent.createChooser(intent, "Open with"))
+                            } catch (e: Exception) { /* ignore */ }
+                        },
+                        modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                    ) {
+                        Icon(Icons.Default.OpenInNew, contentDescription = "Open In", tint = Color.White)
+                    }
+
+                    // Delete button
+                    IconButton(
+                        onClick = onDelete,
+                        modifier = Modifier.background(Color.Red.copy(alpha = 0.7f), CircleShape)
+                    ) {
+                        Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.White)
+                    }
+                }
+            }
+
+            // Bottom File Info
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter)
+                    .background(Color.Black.copy(alpha = 0.6f))
+                    .padding(16.dp)
+            ) {
+                Text(file.name, color = Color.White, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    "${MediaScanner.formatBytes(file.size)} • ${file.folder} • Tap anywhere to dismiss",
+                    color = Color.White.copy(alpha = 0.7f),
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+    }
+}
+
 // ── List row for audio / voice notes / documents ─────────────────────────────
 
 @Composable
@@ -247,32 +397,37 @@ fun MediaListRow(file: MediaFile, isSelected: Boolean, onSelect: () -> Unit) {
         ),
         border = if (isSelected)
             androidx.compose.foundation.BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
-        else null,
-        elevation = CardDefaults.cardElevation(1.dp)
+        else null
     ) {
         Row(
             modifier = Modifier.padding(12.dp).fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Icon / type indicator
-            Box(
-                modifier = Modifier.size(44.dp).clip(RoundedCornerShape(10.dp))
-                    .background(getMediaColor(file.type).copy(alpha = 0.12f)),
-                contentAlignment = Alignment.Center
+            Surface(
+                modifier = Modifier.size(44.dp),
+                shape = RoundedCornerShape(10.dp),
+                color = when (file.type) {
+                    MediaType.DOCUMENTS -> Color(0xFFEF4444).copy(alpha = 0.15f)
+                    MediaType.AUDIO -> Color(0xFFF59E0B).copy(alpha = 0.15f)
+                    MediaType.VOICE_NOTES -> Color(0xFF10B981).copy(alpha = 0.15f)
+                    else -> MaterialTheme.colorScheme.primaryContainer
+                }
             ) {
-                if (isSelected) {
-                    Icon(Icons.Default.CheckCircle, contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
-                } else {
+                Box(contentAlignment = Alignment.Center) {
                     Icon(
-                        imageVector = when (file.type) {
+                        when (file.type) {
+                            MediaType.DOCUMENTS -> Icons.Default.Description
+                            MediaType.AUDIO -> Icons.Default.Audiotrack
                             MediaType.VOICE_NOTES -> Icons.Default.Mic
-                            MediaType.AUDIO -> Icons.Default.MusicNote
-                            MediaType.DOCUMENTS -> Icons.Default.InsertDriveFile
-                            else -> Icons.Default.AttachFile
+                            else -> Icons.Default.InsertDriveFile
                         },
                         contentDescription = null,
-                        tint = getMediaColor(file.type),
+                        tint = when (file.type) {
+                            MediaType.DOCUMENTS -> Color(0xFFEF4444)
+                            MediaType.AUDIO -> Color(0xFFF59E0B)
+                            MediaType.VOICE_NOTES -> Color(0xFF10B981)
+                            else -> MaterialTheme.colorScheme.primary
+                        },
                         modifier = Modifier.size(24.dp)
                     )
                 }
@@ -350,7 +505,12 @@ fun MediaListRow(file: MediaFile, isSelected: Boolean, onSelect: () -> Unit) {
 // ── Grid thumbnail for images / videos ───────────────────────────────────────
 
 @Composable
-fun MediaThumbnail(file: MediaFile, isSelected: Boolean, onSelect: () -> Unit) {
+fun MediaThumbnail(
+    file: MediaFile,
+    isSelected: Boolean,
+    onSelect: () -> Unit,
+    onPreview: () -> Unit
+) {
     val context = LocalContext.current
 
     Box(
@@ -363,11 +523,19 @@ fun MediaThumbnail(file: MediaFile, isSelected: Boolean, onSelect: () -> Unit) {
                 color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
                 shape = RoundedCornerShape(10.dp)
             )
-            .clickable { onSelect() }
+            .clickable { onPreview() }
     ) {
-        // Thumbnail
+        // Thumbnail using Coil with VideoFrameDecoder support for videos
+        val imageRequest = remember(file.path) {
+            ImageRequest.Builder(context)
+                .data(File(file.path))
+                .decoderFactory(VideoFrameDecoder.Factory())
+                .crossfade(true)
+                .build()
+        }
+
         AsyncImage(
-            model = File(file.path),
+            model = imageRequest,
             contentDescription = null,
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.Crop
@@ -375,7 +543,7 @@ fun MediaThumbnail(file: MediaFile, isSelected: Boolean, onSelect: () -> Unit) {
 
         // Video play overlay
         if (file.type == MediaType.VIDEOS) {
-            Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.2f)))
+            Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.25f)))
             Icon(
                 Icons.Default.PlayCircle, contentDescription = null,
                 tint = Color.White, modifier = Modifier.size(32.dp).align(Alignment.Center)
@@ -423,30 +591,17 @@ fun MediaThumbnail(file: MediaFile, isSelected: Boolean, onSelect: () -> Unit) {
             }
         }
 
-        // Tap-to-open icon (top-left when not selected)
-        if (!isSelected) {
-            IconButton(
-                onClick = {
-                    try {
-                        val f = File(file.path)
-                        val ext = file.name.substringAfterLast(".", "")
-                        val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext.lowercase())
-                            ?: if (file.type == MediaType.IMAGES) "image/*" else "video/*"
-                        val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", f)
-                        val intent = Intent(Intent.ACTION_VIEW).apply {
-                            setDataAndType(uri, mime)
-                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        }
-                        context.startActivity(Intent.createChooser(intent, "Open"))
-                    } catch (e: Exception) { /* no app */ }
-                },
-                modifier = Modifier.size(32.dp).align(Alignment.TopStart)
-            ) {
-                Icon(
-                    Icons.Default.OpenInNew, contentDescription = "Preview",
-                    tint = Color.White, modifier = Modifier.size(14.dp)
-                )
-            }
+        // Select checkbox tap area (top-right)
+        IconButton(
+            onClick = onSelect,
+            modifier = Modifier.size(36.dp).align(Alignment.TopEnd)
+        ) {
+            Icon(
+                if (isSelected) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
+                contentDescription = "Select",
+                tint = if (isSelected) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.8f),
+                modifier = Modifier.size(20.dp)
+            )
         }
     }
 }

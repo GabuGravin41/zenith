@@ -23,8 +23,8 @@ class SmsReceiver : BroadcastReceiver() {
                 
                 Log.d("SmsReceiver", "Received SMS from $address: $body")
                 
-                // Parse the SMS
-                val transaction = SmsParser.parseSingleSms(body)
+                // Parse the SMS with sender address
+                val transaction = SmsParser.parseSingleSms(body, address)
                 if (transaction != null) {
                     saveTransaction(context, transaction)
                 }

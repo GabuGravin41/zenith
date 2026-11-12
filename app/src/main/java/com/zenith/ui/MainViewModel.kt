@@ -52,8 +52,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isScanning = MutableStateFlow(false)
     val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
 
-    private val _isPrivacyModeEnabled = MutableStateFlow(false)
+    private val _isPrivacyModeEnabled = MutableStateFlow(true)
     val isPrivacyModeEnabled: StateFlow<Boolean> = _isPrivacyModeEnabled.asStateFlow()
+
+    val pendingReviewTransactions: StateFlow<List<TransactionEntity>> = db.transactionDao().getTransactionsNeedingReview()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private val _timeHorizonDays = MutableStateFlow<Int?>(null) // null = all time, 7 = 7 days, 30 = 30 days, etc.
+    val timeHorizonDays: StateFlow<Int?> = _timeHorizonDays.asStateFlow()
+
+    fun setTimeHorizon(days: Int?) {
+        _timeHorizonDays.value = days
+    }
+
+    fun reclassifyTransaction(transactionId: String, description: String, newCategory: String, rememberForFuture: Boolean = true) {
+        viewModelScope.launch(Dispatchers.IO) {
+            db.transactionDao().updateTransactionCategory(transactionId, newCategory)
+            if (rememberForFuture) {
+                db.providerCategoryDao().insertProviderCategory(ProviderCategory(description, newCategory))
+                db.transactionDao().updateCategoryByDescription(description, newCategory)
+            }
+        }
+    }
 
     val insights: StateFlow<List<ZenithInsight>> = combine(
         _transactions, 
@@ -130,10 +150,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun manualScanSms() {
+    fun manualScanSms(fullScan: Boolean = false) {
         viewModelScope.launch {
             _isScanning.value = true
-            val workRequest = OneTimeWorkRequestBuilder<SmsScanWorker>().build()
+            val data = androidx.work.Data.Builder()
+                .putBoolean("full_scan", fullScan)
+                .build()
+            val workRequest = OneTimeWorkRequestBuilder<SmsScanWorker>()
+                .setInputData(data)
+                .build()
             WorkManager.getInstance(getApplication()).enqueueUniqueWork(
                 "manual_sms_scan",
                 androidx.work.ExistingWorkPolicy.REPLACE,

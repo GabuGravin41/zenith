@@ -34,6 +34,12 @@ interface TransactionDao {
     @Query("UPDATE transactions SET isSuspicious = :isSuspicious WHERE id = :id")
     suspend fun updateSuspiciousStatus(id: String, isSuspicious: Boolean)
 
+    @Query("UPDATE transactions SET category = :category, needsReview = 0 WHERE id = :id")
+    suspend fun updateTransactionCategory(id: String, category: String)
+
+    @Query("SELECT * FROM transactions WHERE needsReview = 1 ORDER BY date DESC LIMIT 10")
+    fun getTransactionsNeedingReview(): Flow<List<TransactionEntity>>
+
     @Query("SELECT source, balance FROM transactions t1 WHERE balance IS NOT NULL AND date = (SELECT MAX(date) FROM transactions t2 WHERE t2.source = t1.source AND t2.balance IS NOT NULL)")
     fun getLatestBalancesBySource(): Flow<List<SourceBalance>>
 }

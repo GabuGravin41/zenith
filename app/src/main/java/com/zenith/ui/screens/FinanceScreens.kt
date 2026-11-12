@@ -56,8 +56,8 @@ fun FinanceDashboardScreen(viewModel: MainViewModel, onNavigate: (String) -> Uni
                             tint = if (isPrivacyMode) MaterialTheme.colorScheme.primary else Color.Gray
                         )
                     }
-                    IconButton(onClick = { viewModel.manualScanSms() }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Scan SMS")
+                    IconButton(onClick = { viewModel.manualScanSms(fullScan = true) }) {
+                        Icon(Icons.Default.Sync, contentDescription = "Full Sync SMS")
                     }
                 }
             }

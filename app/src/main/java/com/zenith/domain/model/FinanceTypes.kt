@@ -7,7 +7,7 @@ enum class TransactionType {
 }
 
 enum class TransactionSource {
-    MPESA, EQUITY, OTHER, MANUAL
+    MPESA, EQUITY, KCB, COOP, NCBA, ABSA, STANBIC, DTB, FAMILY_BANK, OTHER, MANUAL
 }
 
 enum class Category(val label: String, val icon: String, val color: String) {

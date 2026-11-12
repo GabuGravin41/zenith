@@ -69,8 +69,9 @@ dependencies {
     implementation "androidx.room:room-ktx:$roomVersion"
     ksp "androidx.room:room-compiler:$roomVersion"
 
-    // Image Loading
+    // Image & Video Loading
     implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation("io.coil-kt:coil-video:2.7.0")
 
     // DataStore for Preferences
     implementation("androidx.datastore:datastore-preferences:1.1.1")
