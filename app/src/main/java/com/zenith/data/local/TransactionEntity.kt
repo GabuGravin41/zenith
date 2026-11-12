@@ -19,5 +19,7 @@ data class TransactionEntity(
     val balance: Double? = null,
     val reference: String? = null,
     val isSuspicious: Boolean = false,
-    val needsReview: Boolean = false
+    val needsReview: Boolean = false,
+    val fee: Double = 0.0,
+    val partyName: String? = null
 )

@@ -115,11 +115,18 @@ fun HomeScreen(viewModel: MainViewModel, onNavigate: (String) -> Unit) {
 
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             ActionCard(
-                "Social Studio",
-                Icons.Default.AutoAwesome,
-                Color(0xFFEC4899),
+                "Party Ledger",
+                Icons.Default.AccountBalanceWallet,
+                Color(0xFF10B981),
                 Modifier.weight(1f),
-                onClick = { onNavigate(Screen.SocialStudio.route) }
+                onClick = { onNavigate(Screen.PartyLedger.route) }
+            )
+            ActionCard(
+                "Fees & Costs",
+                Icons.Default.ReceiptLong,
+                Color(0xFFEF4444),
+                Modifier.weight(1f),
+                onClick = { onNavigate(Screen.TransactionFees.route) }
             )
             ActionCard(
                 "Cleaner",
@@ -127,13 +134,6 @@ fun HomeScreen(viewModel: MainViewModel, onNavigate: (String) -> Unit) {
                 Color(0xFF3B82F6),
                 Modifier.weight(1f),
                 onClick = { onNavigate(Screen.WhatsAppCleaner.route) }
-            )
-            ActionCard(
-                "AI Chat",
-                Icons.Default.Psychology,
-                Color(0xFF8B5CF6),
-                Modifier.weight(1f),
-                onClick = { onNavigate(Screen.AiChat.route) }
             )
         }
 

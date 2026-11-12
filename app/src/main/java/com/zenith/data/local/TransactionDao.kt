@@ -42,4 +42,19 @@ interface TransactionDao {
 
     @Query("SELECT source, balance FROM transactions t1 WHERE balance IS NOT NULL AND date = (SELECT MAX(date) FROM transactions t2 WHERE t2.source = t1.source AND t2.balance IS NOT NULL)")
     fun getLatestBalancesBySource(): Flow<List<SourceBalance>>
+
+    @Query("SELECT * FROM transactions WHERE partyName = :party OR description LIKE '%' || :party || '%' ORDER BY date DESC")
+    fun getTransactionsForParty(party: String): Flow<List<TransactionEntity>>
+
+    @Query("SELECT SUM(fee) FROM transactions WHERE fee > 0")
+    fun getTotalAccruedFees(): Flow<Double?>
+
+    @Query("SELECT description, SUM(fee) as totalFee, COUNT(*) as count FROM transactions WHERE fee > 0 GROUP BY description ORDER BY totalFee DESC")
+    fun getFeesByMerchant(): Flow<List<MerchantFeeSummary>>
 }
+
+data class MerchantFeeSummary(
+    val description: String,
+    val totalFee: Double,
+    val count: Int
+)

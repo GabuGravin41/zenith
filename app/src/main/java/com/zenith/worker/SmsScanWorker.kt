@@ -71,7 +71,9 @@ class SmsScanWorker(
                             rawText = transaction.rawText,
                             balance = transaction.balance,
                             reference = transaction.reference,
-                            needsReview = needsReview
+                            needsReview = needsReview,
+                            fee = transaction.fee,
+                            partyName = transaction.partyName
                         )
                     )
                     if (rowId != -1L) {

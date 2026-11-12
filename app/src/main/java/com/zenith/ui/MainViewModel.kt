@@ -55,6 +55,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isPrivacyModeEnabled = MutableStateFlow(true)
     val isPrivacyModeEnabled: StateFlow<Boolean> = _isPrivacyModeEnabled.asStateFlow()
 
+    val totalAccruedFees: StateFlow<Double> = db.transactionDao().getTotalAccruedFees()
+        .map { it ?: 0.0 }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.0)
+
+    val merchantFeeSummaries = db.transactionDao().getFeesByMerchant()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     val pendingReviewTransactions: StateFlow<List<TransactionEntity>> = db.transactionDao().getTransactionsNeedingReview()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 

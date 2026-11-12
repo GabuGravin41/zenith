@@ -35,5 +35,7 @@ data class Transaction(
     val source: TransactionSource,
     val rawText: String,
     val balance: Double? = null,
-    val reference: String? = null
+    val reference: String? = null,
+    val fee: Double = 0.0,
+    val partyName: String? = null
 )

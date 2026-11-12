@@ -30,6 +30,12 @@ object SmsParser {
         }
     }
 
+    private fun extractFee(text: String): Double {
+        val feeMatch = Regex("Transaction\\s+cost,?\\s*(?:Ksh|KES)?\\s*([\\d,]+\\.?\\d*)", RegexOption.IGNORE_CASE).find(text)
+            ?: Regex("(?:Fee|Charge):?\\s*(?:Ksh|KES)?\\s*([\\d,]+\\.?\\d*)", RegexOption.IGNORE_CASE).find(text)
+        return feeMatch?.groupValues?.get(1)?.let { parseAmount(it) } ?: 0.0
+    }
+
     fun parseSingleSms(text: String, senderAddress: String? = null): Transaction? {
         val upperText = text.uppercase()
         val upperSender = (senderAddress ?: "").uppercase()
@@ -84,12 +90,14 @@ object SmsParser {
 
         val balanceMatch = Regex("balance[^\\d]*([\\d,]+\\.?\\d*)", RegexOption.IGNORE_CASE).find(text)
         val balance = balanceMatch?.groupValues?.get(1)?.let { parseAmount(it) }
+        val fee = extractFee(text)
 
         // 1. Received
         val receivedMatch = Regex("received\\s+Ksh\\s*([\\d,]+\\.?\\d*)\\s+from\\s+(.+?)(?:\\s+\\d{10}|\\s+on)", RegexOption.IGNORE_CASE).find(text)
         if (receivedMatch != null) {
             val amount = parseAmount(receivedMatch.groupValues[1])
-            val description = "Received from ${receivedMatch.groupValues[2].trim()}"
+            val rawParty = receivedMatch.groupValues[2].trim()
+            val description = "Received from $rawParty"
             return Transaction(
                 id = generateId(confirmRef),
                 date = date,
@@ -100,7 +108,9 @@ object SmsParser {
                 source = TransactionSource.MPESA,
                 rawText = text,
                 balance = balance,
-                reference = confirmRef
+                reference = confirmRef,
+                fee = fee,
+                partyName = rawParty
             )
         }
 
@@ -110,11 +120,9 @@ object SmsParser {
 
         if (sentMatch != null) {
             val amount = parseAmount(sentMatch.groupValues[1])
-            val rawRecipient = sentMatch.groupValues[2].trim()
-            val description = "Sent to $rawRecipient"
+            val rawParty = sentMatch.groupValues[2].trim()
+            val description = "Sent to $rawParty"
             val initialCategory = FinanceCategories.categorize(description, TransactionType.DEBIT)
-            // Flag ambiguous person-to-person transfers for user review
-            val isAmbiguous = initialCategory == Category.TRANSFER && !description.contains("bank", ignoreCase = true)
             return Transaction(
                 id = generateId(confirmRef),
                 date = date,
@@ -125,7 +133,9 @@ object SmsParser {
                 source = TransactionSource.MPESA,
                 rawText = text,
                 balance = balance,
-                reference = confirmRef
+                reference = confirmRef,
+                fee = fee,
+                partyName = rawParty
             )
         }
 
@@ -133,7 +143,8 @@ object SmsParser {
         val paidMatch = Regex("Ksh\\s*([\\d,]+\\.?\\d*)\\s+paid\\s+to\\s+(.+?)\\.", RegexOption.IGNORE_CASE).find(text)
         if (paidMatch != null) {
             val amount = parseAmount(paidMatch.groupValues[1])
-            val description = "Paid to ${paidMatch.groupValues[2].trim()}"
+            val rawParty = paidMatch.groupValues[2].trim()
+            val description = "Paid to $rawParty"
             return Transaction(
                 id = generateId(confirmRef),
                 date = date,
@@ -144,7 +155,9 @@ object SmsParser {
                 source = TransactionSource.MPESA,
                 rawText = text,
                 balance = balance,
-                reference = confirmRef
+                reference = confirmRef,
+                fee = fee,
+                partyName = rawParty
             )
         }
 
@@ -152,7 +165,8 @@ object SmsParser {
         val withdrawalMatch = Regex("Ksh\\s*([\\d,]+\\.?\\d*)\\s+withdrawn\\s+from\\s+(?:agent\\s+)?(.+?)(?:\\s+\\d{10}|\\s+on)", RegexOption.IGNORE_CASE).find(text)
         if (withdrawalMatch != null) {
             val amount = parseAmount(withdrawalMatch.groupValues[1])
-            val description = "Withdrawal from ${withdrawalMatch.groupValues[2].trim()}"
+            val rawParty = withdrawalMatch.groupValues[2].trim()
+            val description = "Withdrawal from $rawParty"
             return Transaction(
                 id = generateId(confirmRef),
                 date = date,
@@ -163,7 +177,9 @@ object SmsParser {
                 source = TransactionSource.MPESA,
                 rawText = text,
                 balance = balance,
-                reference = confirmRef
+                reference = confirmRef,
+                fee = fee,
+                partyName = rawParty
             )
         }
 
@@ -182,7 +198,9 @@ object SmsParser {
                 source = TransactionSource.MPESA,
                 rawText = text,
                 balance = balance,
-                reference = confirmRef
+                reference = confirmRef,
+                fee = fee,
+                partyName = "Safaricom"
             )
         }
 
@@ -199,8 +217,8 @@ object SmsParser {
 
         val balance = balanceMatch?.groupValues?.get(1)?.let { parseAmount(it) }
         val reference = refMatch?.groupValues?.get(1)
-
         val date = extractGenericDate(text) ?: Date()
+        val fee = extractFee(text)
 
         if (debitMatch != null) {
             val amount = parseAmount(debitMatch.groupValues[1])
@@ -217,7 +235,9 @@ object SmsParser {
                 source = TransactionSource.EQUITY,
                 rawText = text,
                 balance = balance,
-                reference = reference
+                reference = reference,
+                fee = fee,
+                partyName = recipient
             )
         }
 
@@ -236,7 +256,9 @@ object SmsParser {
                 source = TransactionSource.EQUITY,
                 rawText = text,
                 balance = balance,
-                reference = reference
+                reference = reference,
+                fee = fee,
+                partyName = sender
             )
         }
 
@@ -254,6 +276,7 @@ object SmsParser {
         val balance = balanceMatch?.groupValues?.get(1)?.let { parseAmount(it) }
         val reference = refMatch?.groupValues?.get(1)
         val date = extractGenericDate(text) ?: Date()
+        val fee = extractFee(text)
 
         if (debitMatch != null) {
             val amount = parseAmount(debitMatch.groupValues[1])
@@ -270,7 +293,9 @@ object SmsParser {
                 source = TransactionSource.KCB,
                 rawText = text,
                 balance = balance,
-                reference = reference
+                reference = reference,
+                fee = fee,
+                partyName = party
             )
         }
 
@@ -289,7 +314,9 @@ object SmsParser {
                 source = TransactionSource.KCB,
                 rawText = text,
                 balance = balance,
-                reference = reference
+                reference = reference,
+                fee = fee,
+                partyName = party
             )
         }
 
@@ -306,6 +333,7 @@ object SmsParser {
         val balance = balanceMatch?.groupValues?.get(1)?.let { parseAmount(it) }
         val reference = refMatch?.groupValues?.get(1)
         val date = extractGenericDate(text) ?: Date()
+        val fee = extractFee(text)
 
         if (debitMatch != null) {
             val amount = parseAmount(debitMatch.groupValues[1])
@@ -322,7 +350,9 @@ object SmsParser {
                 source = TransactionSource.COOP,
                 rawText = text,
                 balance = balance,
-                reference = reference
+                reference = reference,
+                fee = fee,
+                partyName = party
             )
         }
 
@@ -339,7 +369,9 @@ object SmsParser {
                 source = TransactionSource.COOP,
                 rawText = text,
                 balance = balance,
-                reference = reference
+                reference = reference,
+                fee = fee,
+                partyName = null
             )
         }
 
@@ -355,6 +387,7 @@ object SmsParser {
         val balance = balanceMatch?.groupValues?.get(1)?.let { parseAmount(it) }
         val reference = refMatch?.groupValues?.get(1)
         val date = extractGenericDate(text) ?: Date()
+        val fee = extractFee(text)
 
         if (debitMatch != null) {
             val amount = parseAmount(debitMatch.groupValues[1])
@@ -369,7 +402,9 @@ object SmsParser {
                 source = TransactionSource.NCBA,
                 rawText = text,
                 balance = balance,
-                reference = reference
+                reference = reference,
+                fee = fee,
+                partyName = null
             )
         }
 
@@ -386,7 +421,9 @@ object SmsParser {
                 source = TransactionSource.NCBA,
                 rawText = text,
                 balance = balance,
-                reference = reference
+                reference = reference,
+                fee = fee,
+                partyName = null
             )
         }
 
@@ -399,6 +436,7 @@ object SmsParser {
         val isCredit = text.contains("credited", ignoreCase = true) || text.contains("received", ignoreCase = true)
         val balanceMatch = Regex("bal(?:ance)?\\s*(?:is)?\\s*(?:KES|Ksh)?\\s*([\\d,]+\\.?\\d*)", RegexOption.IGNORE_CASE).find(text)
         val refMatch = Regex("Ref(?:erence)?:?\\s*([A-Z0-9]+)", RegexOption.IGNORE_CASE).find(text)
+        val fee = extractFee(text)
 
         if (amountMatch != null && (isDebit || isCredit)) {
             val amount = parseAmount(amountMatch.groupValues[1])
@@ -416,7 +454,9 @@ object SmsParser {
                 source = TransactionSource.ABSA,
                 rawText = text,
                 balance = balance,
-                reference = reference
+                reference = reference,
+                fee = fee,
+                partyName = null
             )
         }
         return null
@@ -426,6 +466,8 @@ object SmsParser {
         val amountMatch = Regex("(?:KES|Ksh)\\s*([\\d,]+\\.?\\d*)", RegexOption.IGNORE_CASE).find(text)
         val isDebit = text.contains("debit", ignoreCase = true) || text.contains("paid", ignoreCase = true)
         val isCredit = text.contains("credit", ignoreCase = true) || text.contains("received", ignoreCase = true)
+        val fee = extractFee(text)
+
         if (amountMatch != null && (isDebit || isCredit)) {
             val amount = parseAmount(amountMatch.groupValues[1])
             val type = if (isDebit) TransactionType.DEBIT else TransactionType.CREDIT
@@ -440,7 +482,9 @@ object SmsParser {
                 source = TransactionSource.STANBIC,
                 rawText = text,
                 balance = null,
-                reference = null
+                reference = null,
+                fee = fee,
+                partyName = null
             )
         }
         return null
@@ -463,6 +507,7 @@ object SmsParser {
 
         val balanceMatch = Regex("(?:available|bal(?:ance)?)\\s*(?:is)?\\s*(?:KES|Ksh)?\\s*([\\d,]+\\.?\\d*)", RegexOption.IGNORE_CASE).find(text)
         val balance = balanceMatch?.groupValues?.get(1)?.let { parseAmount(it) }
+        val fee = extractFee(text)
 
         return Transaction(
             id = generateId(null),
@@ -474,7 +519,9 @@ object SmsParser {
             source = TransactionSource.OTHER,
             rawText = text,
             balance = balance,
-            reference = null
+            reference = null,
+            fee = fee,
+            partyName = null
         )
     }
 

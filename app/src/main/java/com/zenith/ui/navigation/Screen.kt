@@ -25,4 +25,6 @@ sealed class Screen(val route: String, val title: String) {
 
     // Details
     object TransactionDetail : Screen("transaction_detail/{id}", "Transaction Details")
+    object PartyLedger : Screen("party_ledger", "Party Ledger")
+    object TransactionFees : Screen("transaction_fees", "Fees & Charges")
 }

@@ -45,7 +45,9 @@ class SmsReceiver : BroadcastReceiver() {
             source = transaction.source.name,
             rawText = transaction.rawText,
             balance = transaction.balance,
-            reference = transaction.reference
+            reference = transaction.reference,
+            fee = transaction.fee,
+            partyName = transaction.partyName
         )
 
         CoroutineScope(Dispatchers.IO).launch {

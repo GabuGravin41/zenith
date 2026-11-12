@@ -92,6 +92,8 @@ val drawerSections = listOf(
     )),
     DrawerSection("Intelligence", listOf(
         DrawerItem(Screen.FinanceDashboard, Icons.Filled.AccountBalanceWallet),
+        DrawerItem(Screen.PartyLedger, Icons.Filled.People),
+        DrawerItem(Screen.TransactionFees, Icons.Filled.ReceiptLong),
         DrawerItem(Screen.Analytics, Icons.Filled.BarChart),
         DrawerItem(Screen.AiChat, Icons.Filled.Psychology)
     )),
@@ -161,6 +163,19 @@ fun MainScreen(viewModel: MainViewModel, onCheckPermissions: () -> Unit) {
                 }
                 composable(Screen.FinanceDashboard.route) { FinanceDashboardScreen(viewModel, onNavigate = { route -> navController.navigate(route) }) }
                 composable(Screen.Transactions.route) { TransactionsScreen(viewModel, onNavigate = { route -> navController.navigate(route) }) }
+                composable(Screen.PartyLedger.route) {
+                    PartyLedgerScreen(
+                        viewModel = viewModel,
+                        onNavigateBack = { navController.popBackStack() },
+                        onNavigateToDetail = { id -> navController.navigate("transaction_detail/$id") }
+                    )
+                }
+                composable(Screen.TransactionFees.route) {
+                    TransactionFeesScreen(
+                        viewModel = viewModel,
+                        onNavigateBack = { navController.popBackStack() }
+                    )
+                }
                 composable(Screen.Analytics.route) { AnalyticsScreen(viewModel) }
                 composable(
                     Screen.TransactionDetail.route,
