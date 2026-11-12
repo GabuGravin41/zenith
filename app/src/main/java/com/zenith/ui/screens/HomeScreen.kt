@@ -44,6 +44,21 @@ fun HomeScreen(viewModel: MainViewModel, onNavigate: (String) -> Unit) {
     val isScanning by viewModel.isScanning.collectAsState()
     val pullToRefreshState = rememberPullToRefreshState()
 
+    // Timeline filter
+    val timelineOptions = listOf("3M", "6M", "1Y", "2Y", "All")
+    var selectedTimeline by remember { mutableStateOf("6M") }
+    val filteredTransactions = remember(transactions, selectedTimeline) {
+        val now = System.currentTimeMillis()
+        val cutoff = when (selectedTimeline) {
+            "3M" -> now - 90L * 24 * 60 * 60 * 1000
+            "6M" -> now - 180L * 24 * 60 * 60 * 1000
+            "1Y" -> now - 365L * 24 * 60 * 60 * 1000
+            "2Y" -> now - 730L * 24 * 60 * 60 * 1000
+            else -> 0L
+        }
+        if (selectedTimeline == "All") transactions else transactions.filter { it.date >= cutoff }
+    }
+
     PullToRefreshBox(
         isRefreshing = isScanning,
         onRefresh = { viewModel.manualScanSms(fullScan = true) },
@@ -98,10 +113,38 @@ fun HomeScreen(viewModel: MainViewModel, onNavigate: (String) -> Unit) {
             }
         }
 
-        Spacer(Modifier.height(32.dp))
+        Spacer(Modifier.height(16.dp))
+
+        // Timeline filter chips
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            items(timelineOptions) { option ->
+                FilterChip(
+                    selected = selectedTimeline == option,
+                    onClick = { selectedTimeline = option },
+                    label = {
+                        Text(
+                            when (option) {
+                                "3M" -> "3 Months"
+                                "6M" -> "6 Months"
+                                "1Y" -> "1 Year"
+                                "2Y" -> "2 Years"
+                                else -> "All Time"
+                            },
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    },
+                    shape = RoundedCornerShape(20.dp)
+                )
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
 
         // Premium Main Dashboard Card
-        MainSummaryCard(transactions, latestBalance, sourceBalances, isPrivacyMode, onNavigate)
+        MainSummaryCard(filteredTransactions, latestBalance, sourceBalances, isPrivacyMode, onNavigate)
 
         Spacer(Modifier.height(32.dp))
 
@@ -151,7 +194,7 @@ fun HomeScreen(viewModel: MainViewModel, onNavigate: (String) -> Unit) {
         Spacer(Modifier.height(32.dp))
 
         // Recent Activity Preview
-        if (transactions.isNotEmpty()) {
+        if (filteredTransactions.isNotEmpty()) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -163,7 +206,7 @@ fun HomeScreen(viewModel: MainViewModel, onNavigate: (String) -> Unit) {
                 }
             }
             Spacer(Modifier.height(8.dp))
-            transactions.take(5).forEach { tx ->
+            filteredTransactions.take(5).forEach { tx ->
                 TransactionRow(
                     tx, 
                     isPrivacyMode = isPrivacyMode,
